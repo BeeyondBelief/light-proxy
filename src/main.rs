@@ -1,7 +1,7 @@
 use clap::Parser;
-use light_proxy::{run, ExecuteConfig, Result};
+use light_proxy::{run, ExecuteConfig, ProxyMode, Result};
 use log;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -21,11 +21,17 @@ struct Args {
         help = "From what port listen for HTTP requests"
     )]
     listen_port: u16,
+
+    #[arg(short = 'm', long, default_value = "socks", help = "Proxy mode to use")]
+    mode: ProxyMode,
 }
 
 impl Into<ExecuteConfig> for Args {
     fn into(self) -> ExecuteConfig {
-        ExecuteConfig::new(self.listen_ip, self.listen_port)
+        ExecuteConfig {
+            listen_address: SocketAddr::new(self.listen_ip, self.listen_port),
+            mode: self.mode,
+        }
     }
 }
 

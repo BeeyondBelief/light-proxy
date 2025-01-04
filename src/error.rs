@@ -5,7 +5,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 // https://www.youtube.com/watch?v=j-VQCYP7wyw&t=379s
 #[derive(Debug, From)]
 pub enum Error {
-    SOCKS5(crate::socks::Error),
+    UnknownMode,
+
+    SOCKS(crate::socks::Error),
 
     #[from]
     IO(std::io::Error),
