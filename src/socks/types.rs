@@ -1,10 +1,12 @@
 use crate::socks::error::Error;
 use crate::socks::result::Result;
+use std::io;
 use std::net::TcpStream;
 
 // Описание протокола https://datatracker.ietf.org/doc/html/rfc1928
 pub type StreamId = String;
-
+pub const SUCCESS_CODE: u8 = 0;
+pub const CREDENTIAL_AUTH_VERSION: u8 = 1;
 pub type CredentialAuthProvider = Box<dyn Fn(&str, &str) -> bool>;
 
 #[derive(Debug, Eq, PartialEq)]
@@ -77,6 +79,24 @@ impl Socks5ErrCode {
             Socks5ErrCode::CommandUnsupported => 7,
             Socks5ErrCode::AddressTypeNotSupported => 8,
             Socks5ErrCode::AuthMethodNotSupported => 255,
+        }
+    }
+}
+
+impl From<&Error> for Socks5ErrCode {
+    fn from(value: &Error) -> Self {
+        match value {
+            Error::SocksCMDNotSupported => Socks5ErrCode::CommandUnsupported,
+            Error::SocksAddrTypeNotSupported => Socks5ErrCode::AddressTypeNotSupported,
+            Error::SockAuthMethodNotSupportedByClient => Socks5ErrCode::AuthMethodNotSupported,
+            Error::SocksBadCredentialsProvided => Socks5ErrCode::ConnectionNotAllowed,
+            Error::IO(e) => match e.kind() {
+                io::ErrorKind::ConnectionRefused => Socks5ErrCode::ConnectionRefused,
+                io::ErrorKind::HostUnreachable => Socks5ErrCode::HostUnreachable,
+                io::ErrorKind::NetworkUnreachable => Socks5ErrCode::NetworkUnreachable,
+                _ => Socks5ErrCode::GeneralFailure,
+            },
+            _ => Socks5ErrCode::GeneralFailure,
         }
     }
 }

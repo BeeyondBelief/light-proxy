@@ -1,6 +1,7 @@
 mod error;
 mod result;
 mod types;
+mod utils;
 
 pub use error::Error;
 use log;
@@ -22,11 +23,7 @@ pub fn handle_socks(stream: TcpStream) -> Result<()> {
 
     communicate_streams(&mut conn)?;
 
-    log::info!(
-        "Successfully finished sending packets between client \"{}\" and target \"{}\"",
-        conn.from.id,
-        conn.to.id
-    );
+    log::info!("Successfully finished connection with \"{}\"", conn.from.id,);
     Ok(())
 }
 
@@ -37,8 +34,14 @@ fn handshake_socks5(
     mut stream: TcpStream,
     auth: &types::SocksAuthMethod,
 ) -> Result<types::SocksConnection> {
-    let handshake = start_socks5_handshake(&mut stream)?;
-    handle_socks5_auth(&handshake, &mut stream, auth)?;
+    let handshake = start_socks5_handshake(&mut stream).or_else(|e| {
+        utils::send_socks5_error(&mut stream, &e)?;
+        return Err(e);
+    })?;
+    if let Err(e) = handle_socks5_auth(&handshake, &mut stream, auth) {
+        utils::send_socks5_error(&mut stream, &e)?;
+        return Err(e);
+    }
     finish_socks5_handshake(&handshake, stream)
 }
 
@@ -51,36 +54,17 @@ fn start_socks5_handshake(stream: &mut TcpStream) -> Result<types::SocksHandshak
     let stream_id = peer.to_string();
 
     let mut protocol_line = [0u8; 2];
-    stream.read_exact(&mut protocol_line).or_else(|_| {
-        send_socks5_error(stream, &types::Socks5ErrCode::GeneralFailure)?;
-        Err(Error::SocksBadProtocol)
-    })?;
+    stream.read_exact(&mut protocol_line)?;
 
-    let protocol: types::SocksProtocol = protocol_line[0].try_into().or_else(|e| {
-        send_socks5_error(stream, &types::Socks5ErrCode::GeneralFailure)?;
-        Err(e)
-    })?;
+    let protocol: types::SocksProtocol = protocol_line[0].try_into()?;
     log::trace!(
         "Got SOCKS version on client \"{}\": {}",
         stream_id,
         protocol.value()
     );
-    if protocol_line[1] == 0 {
-        send_socks5_error(stream, &types::Socks5ErrCode::GeneralFailure)?;
-        return Err(Error::SocksBadProtocol);
-    };
-    log::trace!(
-        "Number of supported authentication methods on client \"{}\": {}",
-        stream_id,
-        protocol_line[1]
-    );
-    let num_of_auth_methods = protocol_line[1] as usize;
+    let mut auth_methods = vec![0u8; protocol_line[1] as usize];
+    stream.read_exact(&mut auth_methods)?;
 
-    let mut auth_methods = vec![0u8; num_of_auth_methods];
-    stream.read_exact(&mut auth_methods).or_else(|_| {
-        send_socks5_error(stream, &types::Socks5ErrCode::GeneralFailure)?;
-        Err(Error::SocksBadProtocol)
-    })?;
     log::trace!(
         "Got auth methods on client \"{}\": {:?}",
         stream_id,
@@ -107,18 +91,23 @@ fn handle_socks5_auth(
         handshake.id,
     );
     if !handshake.is_auth_supported(auth) {
-        stream.write(&[
-            handshake.protocol.value(),
-            types::Socks5ErrCode::AuthMethodNotSupported.value(),
-        ])?;
         return Err(Error::SockAuthMethodNotSupportedByClient);
     }
-
+    // Select auth method
     stream.write(&[handshake.protocol.value(), auth.value()])?;
     match auth {
         types::SocksAuthMethod::NoAuth => Ok(()),
         types::SocksAuthMethod::Credentials { provider } => {
-            socks5_credential_authentication(handshake, stream, provider)
+            if let Err(e) = socks5_credential_authentication(handshake, stream, provider) {
+                stream.write(&[
+                    types::CREDENTIAL_AUTH_VERSION,
+                    types::Socks5ErrCode::from(&e).value(),
+                ])?;
+                Err(e)
+            } else {
+                stream.write(&[types::CREDENTIAL_AUTH_VERSION, types::SUCCESS_CODE])?;
+                Ok(())
+            }
         }
     }
 }
@@ -135,45 +124,21 @@ fn socks5_credential_authentication(
         handshake.id
     );
     let mut version = [0u8];
-    stream
-        .read_exact(&mut version)
-        .or(Err(Error::SocksBadProtocol))?;
+    stream.read_exact(&mut version)?;
 
-    let mut username_length = [0u8];
-    stream
-        .read_exact(&mut username_length)
-        .or(Err(Error::SocksBadUsername))?;
+    let username = utils::read_utf8_str(stream)?;
 
-    let mut username = vec![0u8; username_length[0] as usize];
-    stream
-        .read_exact(&mut username)
-        .or(Err(Error::SocksBadUsername))?;
+    log::trace!("Got username from client \"{}\"", handshake.id);
 
-    let username = String::from_utf8(username).or(Err(Error::SocksBadUsername))?;
+    let password = utils::read_utf8_str(stream)?;
 
-    log::trace!("Got complete username from client \"{}\"", handshake.id);
-
-    let mut password_length = [0u8];
-    stream
-        .read_exact(&mut password_length)
-        .or(Err(Error::SocksBadPassword))?;
-
-    let mut password = vec![0u8; password_length[0] as usize];
-    stream
-        .read_exact(&mut password)
-        .or(Err(Error::SocksBadPassword))?;
-
-    let password = String::from_utf8(password).or(Err(Error::SocksBadPassword))?;
-
-    log::trace!("Got complete password from client \"{}\"", handshake.id);
+    log::trace!("Got password from client \"{}\"", handshake.id);
 
     if auth_provider(&username, &password) {
         log::info!("Successfully authenticated client \"{}\"", handshake.id);
-        stream.write(&[0x1, 0x0])?;
         Ok(())
     } else {
-        log::error!("Failed to authenticate client \"{}\"", handshake.id);
-        stream.write(&[0x1, types::Socks5ErrCode::ConnectionNotAllowed.value()])?;
+        log::warn!("Failed to authenticate client \"{}\"", handshake.id);
         Err(Error::SocksBadCredentialsProvided)
     }
 }
@@ -186,24 +151,9 @@ fn finish_socks5_handshake(
     let addr = read_request_details(&handshake, &mut stream)?;
 
     log::info!("Connecting to \"{}\" for client \"{}\"", addr, handshake.id);
-    let target_stream = TcpStream::connect(addr).or_else(|e| {
-        let err = match e.kind() {
-            io::ErrorKind::ConnectionRefused => types::Socks5ErrCode::ConnectionRefused,
-            io::ErrorKind::HostUnreachable => types::Socks5ErrCode::HostUnreachable,
-            io::ErrorKind::NetworkUnreachable => types::Socks5ErrCode::NetworkUnreachable,
-            _ => types::Socks5ErrCode::GeneralFailure,
-        };
-        send_socks5_error(&mut stream, &err)?;
-        Err(<Error>::from(e))
-    })?;
+    let target_stream = TcpStream::connect(addr)?;
     let peer = target_stream.local_addr()?;
 
-    log::trace!(
-        "Assigned local ip \"{}\" for \"{}\" for client \"{}\"",
-        peer,
-        addr,
-        handshake.id
-    );
     let mut octets = vec![];
     let ip_ver;
     match peer.ip() {
@@ -218,8 +168,8 @@ fn finish_socks5_handshake(
     }
     let mut response = vec![
         handshake.protocol.value(),
-        0x00,
-        0x00, // reserved
+        0,
+        0, // reserved
         ip_ver,
     ];
     response.extend_from_slice(&octets);
@@ -253,40 +203,24 @@ fn read_request_details(
     stream: &mut TcpStream,
 ) -> Result<SocketAddr> {
     let mut protocol_version = [0u8];
-    stream.read_exact(&mut protocol_version).or_else(|_| {
-        send_socks5_error(stream, &types::Socks5ErrCode::GeneralFailure)?;
-        Err(Error::SocksBadProtocol)
-    })?;
+    stream.read_exact(&mut protocol_version)?;
 
-    let mut cmd = [0u8];
-    stream.read_exact(&mut cmd).or_else(|_| {
-        send_socks5_error(stream, &types::Socks5ErrCode::GeneralFailure)?;
-        Err(Error::SocksBadProtocol)
-    })?;
-
-    let cmd: types::SocksCMD = cmd[0].try_into().or_else(|e| {
-        send_socks5_error(stream, &types::Socks5ErrCode::CommandUnsupported)?;
-        Err(e)
-    })?;
+    let cmd: types::SocksCMD = {
+        let mut buff = [0u8];
+        stream.read_exact(&mut buff)?;
+        buff[0].try_into()?
+    };
 
     log::trace!("Got cmd from client \"{}\": {}", handshake.id, cmd.value());
 
     // reserved
-    stream.read_exact(&mut [0u8]).or_else(|_| {
-        send_socks5_error(stream, &types::Socks5ErrCode::GeneralFailure)?;
-        Err(Error::SocksBadProtocol)
-    })?;
+    stream.read_exact(&mut [0u8])?;
 
-    let mut addr_type = [0u8];
-    stream.read(&mut addr_type).or_else(|_| {
-        send_socks5_error(stream, &types::Socks5ErrCode::GeneralFailure)?;
-        Err(Error::SocksBadProtocol)
-    })?;
-
-    let addr_type: types::SocksAddrType = addr_type[0].try_into().or_else(|e| {
-        send_socks5_error(stream, &types::Socks5ErrCode::AddressTypeNotSupported)?;
-        Err(e)
-    })?;
+    let addr_type: types::SocksAddrType = {
+        let mut buff = [0u8];
+        stream.read_exact(&mut buff)?;
+        buff[0].try_into()?
+    };
 
     log::trace!(
         "Got address type from client \"{}\": {}",
@@ -294,20 +228,15 @@ fn read_request_details(
         addr_type.value(),
     );
 
-    let addr = read_address(stream, &addr_type).or_else(|_| {
-        send_socks5_error(stream, &types::Socks5ErrCode::GeneralFailure)?;
-        Err(Error::SocksBadProtocol)
-    })?;
+    let addr = read_address(stream, &addr_type)?;
 
     log::trace!("Got address from client \"{}\": {}", handshake.id, addr);
 
-    let mut port_octets = [0u8; 2];
-    stream.read(&mut port_octets).or_else(|_| {
-        send_socks5_error(stream, &types::Socks5ErrCode::GeneralFailure)?;
-        Err(Error::SocksBadProtocol)
-    })?;
-
-    let port = u16::from_be_bytes(port_octets);
+    let port = {
+        let mut buff = [0u8; 2];
+        stream.read_exact(&mut buff)?;
+        u16::from_be_bytes(buff)
+    };
 
     log::trace!("Got port from client \"{}\": {}", handshake.id, port);
 
@@ -349,7 +278,7 @@ fn communicate_streams(conn: &mut types::SocksConnection) -> Result<()> {
         .set_read_timeout(Some(Duration::from_millis(100)))?;
 
     log::info!(
-        "Start sending packets between client \"{}\" and target \"{}\"",
+        "Start communication between client \"{}\" and target \"{}\"",
         conn.from.id,
         conn.to.id
     );
@@ -385,21 +314,4 @@ fn forward_data(from: &mut types::SockTarget, to: &mut types::SockTarget) -> Res
         has_pending_reply = true;
     }
     Ok(has_pending_reply)
-}
-
-fn send_socks5_error(stream: &mut TcpStream, code: &types::Socks5ErrCode) -> Result<()> {
-    let buffer = [
-        types::SocksProtocol::SOCKS5.value(),
-        code.value(),
-        0, // reserved
-        types::SocksAddrType::IPV4.value(),
-        0, // address
-        0,
-        0,
-        0,
-        0, // port
-        0,
-    ];
-    stream.write_all(&buffer)?;
-    Ok(())
 }

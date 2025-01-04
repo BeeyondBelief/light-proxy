@@ -13,6 +13,8 @@ pub enum Error {
     SocksBadPassword,
     SocksBadCredentialsProvided,
 
+    BadString,
+
     #[from]
     IO(std::io::Error),
 }
