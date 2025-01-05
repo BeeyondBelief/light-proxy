@@ -13,6 +13,7 @@ pub fn send_socks5_error(stream: &mut TcpStream, code: impl Into<Socks5ErrCode>)
     );
     let buffer = [
         SocksProtocol::SOCKS5.value(),
+        c,
         0, // reserved
         SocksAddrType::IPV4.value(),
         0, // address
