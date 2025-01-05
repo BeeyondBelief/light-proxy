@@ -7,6 +7,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     UnknownMode,
 
+    #[from]
     SOCKS(crate::socks::Error),
 
     #[from]

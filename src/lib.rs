@@ -1,14 +1,17 @@
+use crate::proxy::Proxy;
 use log;
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener};
+use std::path::PathBuf;
+
+mod proxy;
 
 mod error;
 pub mod socks;
 
 pub use self::error::{Error, Result};
 
-#[derive(Debug, Clone, clap::ValueEnum)]
 pub enum ProxyMode {
-    SOCKS,
+    SOCKS { credentials_file: Option<PathBuf> },
 }
 
 pub struct ExecuteConfig {
@@ -18,18 +21,19 @@ pub struct ExecuteConfig {
 
 pub fn run(cfg: ExecuteConfig) -> Result<()> {
     log::info!("Starting proxy on \"{}\"", cfg.listen_address);
-    log::debug!("Using mode: {:?}", cfg.mode);
     let listener = TcpListener::bind(cfg.listen_address)?;
 
-    let mode_handle: fn(TcpStream) -> Result<()> = match cfg.mode {
-        ProxyMode::SOCKS => |stream| socks::handle_socks(stream).or_else(|e| Err(Error::SOCKS(e))),
+    let mode_handle: Box<dyn Proxy> = match cfg.mode {
+        ProxyMode::SOCKS { credentials_file } => {
+            Box::new(socks::SocksProxy::new(credentials_file)?)
+        }
     };
 
     log::debug!("Waiting for connections");
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if let Err(e) = mode_handle(stream) {
+                if let Err(e) = mode_handle.accept_stream(stream) {
                     log::error!("Error during connection handling: {:?}", e);
                 }
             }
@@ -49,7 +53,9 @@ mod tests {
     fn used_addr_cannot_bind() {
         let cfg = ExecuteConfig {
             listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
-            mode: ProxyMode::SOCKS,
+            mode: ProxyMode::SOCKS {
+                credentials_file: None,
+            },
         };
 
         let _already_bind_listener = TcpListener::bind(cfg.listen_address).unwrap();

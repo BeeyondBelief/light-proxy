@@ -1,13 +1,15 @@
 use crate::socks::error::Error;
 use crate::socks::result::Result;
+use std::collections::HashSet;
 use std::io;
+use std::io::{BufRead, BufReader};
 use std::net::TcpStream;
+use std::path::PathBuf;
 
 // Описание протокола https://datatracker.ietf.org/doc/html/rfc1928
 pub type StreamId = String;
 pub const SUCCESS_CODE: u8 = 0;
 pub const CREDENTIAL_AUTH_VERSION: u8 = 1;
-pub type CredentialAuthProvider = Box<dyn Fn(&str, &str) -> bool>;
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum SocksProtocol {
@@ -129,12 +131,12 @@ impl TryFrom<u8> for SocksAddrType {
     }
 }
 
-pub enum SocksAuthMethod {
+pub enum SocksAuthMethod<'a> {
     NoAuth,
-    Credentials { provider: CredentialAuthProvider },
+    Credentials { provider: &'a Credentials },
 }
 
-impl SocksAuthMethod {
+impl SocksAuthMethod<'_> {
     pub fn value(&self) -> u8 {
         match self {
             SocksAuthMethod::NoAuth => 0,
@@ -163,4 +165,38 @@ pub struct SockTarget {
 pub struct SocksConnection {
     pub from: SockTarget,
     pub to: SockTarget,
+}
+
+pub struct Credentials {
+    map: HashSet<(String, String)>,
+}
+
+impl Credentials {
+    pub fn empty() -> Credentials {
+        Credentials {
+            map: HashSet::new(),
+        }
+    }
+    pub fn contains(&self, key: &(String, String)) -> bool {
+        self.map.contains(key)
+    }
+}
+
+impl TryFrom<PathBuf> for Credentials {
+    type Error = Error;
+
+    fn try_from(value: PathBuf) -> std::result::Result<Self, Self::Error> {
+        let reader = BufReader::new(std::fs::File::open(value)?);
+
+        let map = HashSet::from_iter(reader.lines().filter_map(|line| {
+            if let Ok(line) = line {
+                let (name, value) = line.split_once(':')?;
+                Some((name.to_string(), value.to_string()))
+            } else {
+                None
+            }
+        }));
+
+        Ok(Credentials { map })
+    }
 }

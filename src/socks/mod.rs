@@ -3,28 +3,44 @@ mod result;
 mod types;
 mod utils;
 
+use crate::proxy::Proxy;
 pub use error::Error;
 use log;
 pub use result::Result;
 use std::io;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
+use std::path::PathBuf;
 use std::time::Duration;
 
 const MAX_CLIENT_BUFFER: usize = 1024;
 
-pub fn handle_socks(stream: TcpStream) -> Result<()> {
-    let mut conn = handshake_socks5(
-        stream,
-        &types::SocksAuthMethod::Credentials {
-            provider: Box::new(|username, pass| username == "111" && pass == "123"),
-        },
-    )?;
+pub struct SocksProxy {
+    credentials: types::Credentials,
+}
+impl SocksProxy {
+    pub fn new(credentials_file: Option<PathBuf>) -> Result<Self> {
+        let credentials = match credentials_file {
+            Some(file) => types::Credentials::try_from(file)?,
+            None => types::Credentials::empty(),
+        };
+        Ok(SocksProxy { credentials })
+    }
+}
+impl Proxy for SocksProxy {
+    fn accept_stream(&self, stream: TcpStream) -> crate::Result<()> {
+        let mut conn = handshake_socks5(
+            stream,
+            &types::SocksAuthMethod::Credentials {
+                provider: &self.credentials,
+            },
+        )?;
 
-    communicate_streams(&mut conn)?;
+        communicate_streams(&mut conn)?;
 
-    log::info!("Successfully finished connection with \"{}\"", conn.from.id,);
-    Ok(())
+        log::info!("Successfully finished connection with \"{}\"", conn.from.id,);
+        Ok(())
+    }
 }
 
 /// Initiate SOCKS handshake communication. The provided `stream` will be advanced
@@ -117,7 +133,7 @@ fn handle_socks5_auth(
 fn socks5_credential_authentication(
     handshake: &types::SocksHandshake,
     stream: &mut TcpStream,
-    auth_provider: &types::CredentialAuthProvider,
+    auth_provider: &types::Credentials,
 ) -> Result<()> {
     log::info!(
         "Starting credential authentication for client \"{}\"",
@@ -134,7 +150,7 @@ fn socks5_credential_authentication(
 
     log::trace!("Got password from client \"{}\"", handshake.id);
 
-    if auth_provider(&username, &password) {
+    if auth_provider.contains(&(username, password)) {
         log::info!("Successfully authenticated client \"{}\"", handshake.id);
         Ok(())
     } else {
