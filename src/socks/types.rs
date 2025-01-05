@@ -131,12 +131,12 @@ impl TryFrom<u8> for SocksAddrType {
     }
 }
 
-pub enum SocksAuthMethod<'a> {
+pub enum SocksAuthMethod {
     NoAuth,
-    Credentials { provider: &'a Credentials },
+    Credentials { provider: Credentials },
 }
 
-impl SocksAuthMethod<'_> {
+impl SocksAuthMethod {
     pub fn value(&self) -> u8 {
         match self {
             SocksAuthMethod::NoAuth => 0,
@@ -172,11 +172,6 @@ pub struct Credentials {
 }
 
 impl Credentials {
-    pub fn empty() -> Credentials {
-        Credentials {
-            map: HashSet::new(),
-        }
-    }
     pub fn contains(&self, key: &(String, String)) -> bool {
         self.map.contains(key)
     }

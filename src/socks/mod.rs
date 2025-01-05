@@ -16,25 +16,22 @@ use std::time::Duration;
 const MAX_CLIENT_BUFFER: usize = 1024;
 
 pub struct SocksProxy {
-    credentials: types::Credentials,
+    auth: types::SocksAuthMethod,
 }
 impl SocksProxy {
     pub fn new(credentials_file: Option<PathBuf>) -> Result<Self> {
-        let credentials = match credentials_file {
-            Some(file) => types::Credentials::try_from(file)?,
-            None => types::Credentials::empty(),
+        let auth = match credentials_file {
+            Some(file) => types::SocksAuthMethod::Credentials {
+                provider: types::Credentials::try_from(file)?,
+            },
+            None => types::SocksAuthMethod::NoAuth,
         };
-        Ok(SocksProxy { credentials })
+        Ok(SocksProxy { auth })
     }
 }
 impl Proxy for SocksProxy {
     fn accept_stream(&self, stream: TcpStream) -> crate::Result<()> {
-        let mut conn = handshake_socks5(
-            stream,
-            &types::SocksAuthMethod::Credentials {
-                provider: &self.credentials,
-            },
-        )?;
+        let mut conn = handshake_socks5(stream, &self.auth)?;
 
         communicate_streams(&mut conn)?;
 
