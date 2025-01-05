@@ -30,7 +30,7 @@ impl TryFrom<u8> for SocksProtocol {
     fn try_from(value: u8) -> Result<SocksProtocol> {
         match value {
             5 => Ok(SocksProtocol::SOCKS5),
-            _ => Err(Error::SocksProtocolVersionNotSupported),
+            n => Err(Error::SocksProtocolVersionNotSupported(n)),
         }
     }
 }
@@ -145,26 +145,9 @@ impl SocksAuthMethod {
     }
 }
 
-pub struct SocksHandshake {
-    pub id: StreamId,
-    pub protocol: SocksProtocol,
-    pub auth_methods: Vec<u8>,
-}
-
-impl SocksHandshake {
-    pub fn is_auth_supported(&self, auth: &SocksAuthMethod) -> bool {
-        self.auth_methods.contains(&auth.value())
-    }
-}
-
 pub struct SockTarget {
     pub id: StreamId,
     pub stream: TcpStream,
-}
-
-pub struct SocksConnection {
-    pub from: SockTarget,
-    pub to: SockTarget,
 }
 
 pub struct Credentials {

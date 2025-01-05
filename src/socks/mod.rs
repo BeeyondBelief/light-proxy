@@ -30,12 +30,24 @@ impl SocksProxy {
     }
 }
 impl Proxy for SocksProxy {
-    fn accept_stream(&self, stream: TcpStream) -> crate::Result<()> {
-        let mut conn = handshake_socks5(stream, &self.auth)?;
+    fn accept_stream(&self, mut stream: TcpStream) -> crate::Result<()> {
+        let target = handshake_socks5(&mut stream, &self.auth).map_err(|e| {
+            utils::send_socks5_error(&mut stream, &e)
+                .unwrap_or_else(|_| log::error!("Failed to send SOCKS5 error code"));
+            e
+        })?;
 
-        communicate_streams(&mut conn)?;
+        let mut from = types::SockTarget {
+            id: stream.peer_addr()?.to_string(),
+            stream,
+        };
+        let mut to = types::SockTarget {
+            id: target.peer_addr()?.to_string(),
+            stream: target,
+        };
+        communicate_streams(&mut from, &mut to)?;
 
-        log::info!("Successfully finished connection with \"{}\"", conn.from.id,);
+        log::info!("Successfully finished connection with \"{}\"", from.id);
         Ok(())
     }
 }
@@ -43,75 +55,51 @@ impl Proxy for SocksProxy {
 /// Initiate SOCKS handshake communication. The provided `stream` will be advanced
 /// to read and send protocol details. See more about
 /// [protocol specification](https://datatracker.ietf.org/doc/html/rfc1928).
-fn handshake_socks5(
-    mut stream: TcpStream,
-    auth: &types::SocksAuthMethod,
-) -> Result<types::SocksConnection> {
-    let handshake = start_socks5_handshake(&mut stream).or_else(|e| {
-        utils::send_socks5_error(&mut stream, &e)?;
-        return Err(e);
-    })?;
-    if let Err(e) = handle_socks5_auth(&handshake, &mut stream, auth) {
-        utils::send_socks5_error(&mut stream, &e)?;
-        return Err(e);
+fn handshake_socks5(stream: &mut TcpStream, auth: &types::SocksAuthMethod) -> Result<TcpStream> {
+    let (proto, methods) = start_socks5_handshake(stream)?;
+    if proto != types::SocksProtocol::SOCKS5 {
+        return Err(Error::SocksProtocolVersionNotSupported(proto.value()));
     }
-    finish_socks5_handshake(&handshake, stream)
+    handle_socks5_auth(&proto, &methods, stream, auth)?;
+    finish_socks5_handshake(&proto, stream)
 }
 
 /// Advances `stream` to read SOCKS version and available authentication methods
 /// on client side.
-fn start_socks5_handshake(stream: &mut TcpStream) -> Result<types::SocksHandshake> {
-    let peer = stream.peer_addr()?;
-    log::info!("Start SOCKS handshake with \"{}\"", peer);
-
-    let stream_id = peer.to_string();
+fn start_socks5_handshake(stream: &mut TcpStream) -> Result<(types::SocksProtocol, Vec<u8>)> {
+    log::info!("Start SOCKS handshake");
 
     let mut protocol_line = [0u8; 2];
     stream.read_exact(&mut protocol_line)?;
 
     let protocol: types::SocksProtocol = protocol_line[0].try_into()?;
-    log::trace!(
-        "Got SOCKS version on client \"{}\": {}",
-        stream_id,
-        protocol.value()
-    );
+    log::trace!("Got SOCKS version: {}", protocol.value());
     let mut auth_methods = vec![0u8; protocol_line[1] as usize];
     stream.read_exact(&mut auth_methods)?;
 
-    log::trace!(
-        "Got auth methods on client \"{}\": {:?}",
-        stream_id,
-        auth_methods
-    );
+    log::trace!("Got auth methods: {:?}", auth_methods);
 
-    Ok(types::SocksHandshake {
-        id: stream_id,
-        protocol,
-        auth_methods,
-    })
+    Ok((protocol, auth_methods))
 }
 
 /// Set authentication method required by SOCKS server to client, writing to the `stream`
 /// details about chosen authentication method `auth`.
 fn handle_socks5_auth(
-    handshake: &types::SocksHandshake,
+    protocol: &types::SocksProtocol,
+    auth_methods: &Vec<u8>,
     stream: &mut TcpStream,
     auth: &types::SocksAuthMethod,
 ) -> Result<()> {
-    log::info!(
-        "Setting authentication method \"{}\" for client \"{}\"",
-        auth.value(),
-        handshake.id,
-    );
-    if !handshake.is_auth_supported(auth) {
+    log::info!("Set authentication method \"{}\"", auth.value(),);
+    if !auth_methods.contains(&auth.value()) {
         return Err(Error::SockAuthMethodNotSupportedByClient);
     }
     // Select auth method
-    stream.write(&[handshake.protocol.value(), auth.value()])?;
+    stream.write(&[protocol.value(), auth.value()])?;
     match auth {
         types::SocksAuthMethod::NoAuth => Ok(()),
         types::SocksAuthMethod::Credentials { provider } => {
-            if let Err(e) = socks5_credential_authentication(handshake, stream, provider) {
+            if let Err(e) = socks5_credential_authentication(stream, provider) {
                 stream.write(&[
                     types::CREDENTIAL_AUTH_VERSION,
                     types::Socks5ErrCode::from(&e).value(),
@@ -128,42 +116,38 @@ fn handle_socks5_auth(
 /// Advances `stream` to read client credentials and authenticate client with them.
 /// See more about [protocol specification](https://datatracker.ietf.org/doc/html/rfc1929).
 fn socks5_credential_authentication(
-    handshake: &types::SocksHandshake,
     stream: &mut TcpStream,
     auth_provider: &types::Credentials,
 ) -> Result<()> {
-    log::info!(
-        "Starting credential authentication for client \"{}\"",
-        handshake.id
-    );
+    log::info!("Starting credential authentication");
     let mut version = [0u8];
     stream.read_exact(&mut version)?;
 
     let username = utils::read_utf8_str(stream)?;
 
-    log::trace!("Got username from client \"{}\"", handshake.id);
+    log::trace!("Got username");
 
     let password = utils::read_utf8_str(stream)?;
 
-    log::trace!("Got password from client \"{}\"", handshake.id);
+    log::trace!("Got password");
 
     if auth_provider.contains(&(username, password)) {
-        log::info!("Successfully authenticated client \"{}\"", handshake.id);
+        log::info!("Successfully authenticated client");
         Ok(())
     } else {
-        log::warn!("Failed to authenticate client \"{}\"", handshake.id);
+        log::warn!("Failed to authenticate");
         Err(Error::SocksBadCredentialsProvided)
     }
 }
 
 /// Advances `stream` if server successfully establish connection with requested target.
 fn finish_socks5_handshake(
-    handshake: &types::SocksHandshake,
-    mut stream: TcpStream,
-) -> Result<types::SocksConnection> {
-    let addr = read_request_details(&handshake, &mut stream)?;
+    protocol: &types::SocksProtocol,
+    stream: &mut TcpStream,
+) -> Result<TcpStream> {
+    let addr = read_request_details(stream)?;
 
-    log::info!("Connecting to \"{}\" for client \"{}\"", addr, handshake.id);
+    log::info!("Connecting to \"{}\"", addr);
     let target_stream = TcpStream::connect(addr)?;
     let peer = target_stream.local_addr()?;
 
@@ -180,7 +164,7 @@ fn finish_socks5_handshake(
         }
     }
     let mut response = vec![
-        handshake.protocol.value(),
+        protocol.value(),
         0,
         0, // reserved
         ip_ver,
@@ -188,33 +172,15 @@ fn finish_socks5_handshake(
     response.extend_from_slice(&octets);
     response.extend_from_slice(&peer.port().to_be_bytes());
 
-    log::trace!(
-        "Writing success SOCKS5 to \"{}\": \"{:?}\"",
-        handshake.id,
-        response
-    );
+    log::trace!("Send success SOCKS5: \"{:?}\"", response);
     stream.write_all(&response)?;
 
-    let target_stream_id = target_stream.peer_addr()?.to_string();
-
-    log::info!("Successful handshake with \"{}\"", handshake.id);
-    Ok(types::SocksConnection {
-        from: types::SockTarget {
-            id: handshake.id.to_owned(),
-            stream,
-        },
-        to: types::SockTarget {
-            id: target_stream_id,
-            stream: target_stream,
-        },
-    })
+    log::info!("Successful handshake");
+    Ok(target_stream)
 }
 
 /// Advances `stream` to read details about request target domain.
-fn read_request_details(
-    handshake: &types::SocksHandshake,
-    stream: &mut TcpStream,
-) -> Result<SocketAddr> {
+fn read_request_details(stream: &mut TcpStream) -> Result<SocketAddr> {
     let mut protocol_version = [0u8];
     stream.read_exact(&mut protocol_version)?;
 
@@ -224,7 +190,7 @@ fn read_request_details(
         buff[0].try_into()?
     };
 
-    log::trace!("Got cmd from client \"{}\": {}", handshake.id, cmd.value());
+    log::trace!("Got cmd: {}", cmd.value());
 
     // reserved
     stream.read_exact(&mut [0u8])?;
@@ -235,15 +201,11 @@ fn read_request_details(
         buff[0].try_into()?
     };
 
-    log::trace!(
-        "Got address type from client \"{}\": {}",
-        handshake.id,
-        addr_type.value(),
-    );
+    log::trace!("Got address type: {}", addr_type.value(),);
 
     let addr = read_address(stream, &addr_type)?;
 
-    log::trace!("Got address from client \"{}\": {}", handshake.id, addr);
+    log::trace!("Got address: {}", addr);
 
     let port = {
         let mut buff = [0u8; 2];
@@ -251,7 +213,7 @@ fn read_request_details(
         u16::from_be_bytes(buff)
     };
 
-    log::trace!("Got port from client \"{}\": {}", handshake.id, port);
+    log::trace!("Got port: {}", port);
 
     Ok(SocketAddr::new(addr, port))
 }
@@ -274,31 +236,27 @@ fn read_address(stream: &mut TcpStream, address_type: &types::SocksAddrType) -> 
 }
 
 /// Initiate communication between client and target connections.
-fn communicate_streams(conn: &mut types::SocksConnection) -> Result<()> {
-    conn.to
-        .stream
+fn communicate_streams(from: &mut types::SockTarget, to: &mut types::SockTarget) -> Result<()> {
+    to.stream
         .set_read_timeout(Some(Duration::from_millis(100)))?;
-    conn.from
-        .stream
+    from.stream
         .set_read_timeout(Some(Duration::from_millis(100)))?;
 
-    conn.to
-        .stream
+    to.stream
         .set_read_timeout(Some(Duration::from_millis(100)))?;
 
-    conn.from
-        .stream
+    from.stream
         .set_read_timeout(Some(Duration::from_millis(100)))?;
 
     log::info!(
         "Start communication between client \"{}\" and target \"{}\"",
-        conn.from.id,
-        conn.to.id
+        from.id,
+        to.id
     );
 
     loop {
-        let r1 = forward_data(&mut conn.from, &mut conn.to)?;
-        let r2 = forward_data(&mut conn.to, &mut conn.from)?;
+        let r1 = forward_data(from, to)?;
+        let r2 = forward_data(to, from)?;
         if !r1 && !r2 {
             break;
         }

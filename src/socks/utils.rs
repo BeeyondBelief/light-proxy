@@ -5,15 +5,9 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 
 pub fn send_socks5_error(stream: &mut TcpStream, code: impl Into<Socks5ErrCode>) -> Result<()> {
-    let c = code.into().value();
-    log::trace!(
-        "Send SOCKS5 error code: \"{}\" to client \"{}\"",
-        c,
-        stream.peer_addr()?
-    );
     let buffer = [
         SocksProtocol::SOCKS5.value(),
-        c,
+        code.into().value(),
         0, // reserved
         SocksAddrType::IPV4.value(),
         0, // address
