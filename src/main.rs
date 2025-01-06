@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use light_proxy::{run, ExecuteConfig, ProxyMode, Result};
 use log;
 use std::net::{IpAddr, SocketAddr};
@@ -40,6 +40,15 @@ struct Args {
         help = "From what port listen for HTTP requests"
     )]
     listen_port: u16,
+    #[arg(
+        short = 'v',
+        action = ArgAction::Count,
+        help = "How verbose logging messages are. The more value is set the more messages are \
+                displayed. Maximum message verbosity set at 5"
+    )]
+    #[clap(global = true)]
+    verbosity: u8,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -58,9 +67,26 @@ impl Into<ExecuteConfig> for Args {
     }
 }
 
+fn u8_to_log_level(value: u8) -> log::LevelFilter {
+    match value {
+        1 => log::LevelFilter::Error,
+        2 => log::LevelFilter::Warn,
+        3 => log::LevelFilter::Info,
+        4 => log::LevelFilter::Debug,
+        _ => log::LevelFilter::Trace,
+    }
+}
+
 fn main() -> Result<()> {
-    env_logger::init();
     let args = Args::parse();
+    if args.verbosity > 0 {
+        std::env::set_var(
+            env_logger::DEFAULT_FILTER_ENV,
+            u8_to_log_level(args.verbosity).as_str(),
+        )
+    }
+
+    env_logger::init();
     if let Err(e) = run(args.into()) {
         log::error!("{:?}", e);
         std::process::exit(1);
