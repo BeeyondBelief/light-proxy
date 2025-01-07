@@ -7,13 +7,14 @@ use crate::proxy::Proxy;
 pub use error::Error;
 use log;
 pub use result::Result;
-use std::io;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
+use std::thread;
 use std::time::Duration;
 
-const MAX_CLIENT_BUFFER: usize = 1024;
+const MAX_CLIENT_BUFFER: usize = 1 << 20;
+const WAIT_DATA_TIMEOUT: Duration = Duration::from_millis(10);
 
 pub struct SocksProxy {
     auth: types::SocksAuthMethod,
@@ -237,52 +238,49 @@ fn read_address(stream: &mut TcpStream, address_type: &types::SocksAddrType) -> 
 
 /// Initiate communication between client and target connections.
 fn communicate_streams(from: &mut types::SockTarget, to: &mut types::SockTarget) -> Result<()> {
-    to.stream
-        .set_read_timeout(Some(Duration::from_millis(100)))?;
-    from.stream
-        .set_read_timeout(Some(Duration::from_millis(100)))?;
-
-    to.stream
-        .set_read_timeout(Some(Duration::from_millis(100)))?;
-
-    from.stream
-        .set_read_timeout(Some(Duration::from_millis(100)))?;
-
     log::info!(
-        "Start communication between client \"{}\" and target \"{}\"",
+        "Start communication between \"{}\" and \"{}\"",
         from.id,
         to.id
     );
 
+    from.stream.set_nonblocking(true)?;
+    to.stream.set_nonblocking(true)?;
+
+    let mut buffer = vec![0u8; MAX_CLIENT_BUFFER];
+
     loop {
-        let r1 = forward_data(from, to)?;
-        let r2 = forward_data(to, from)?;
-        if !r1 && !r2 {
+        let mut is_done = forward_data(from, to, &mut buffer)?;
+        is_done |= forward_data(to, from, &mut buffer)?;
+
+        if !is_done {
+            thread::sleep(WAIT_DATA_TIMEOUT);
+        } else {
             break;
         }
     }
+    log::info!(
+        "Finish communication between \"{}\" and \"{}\"",
+        from.id,
+        to.id
+    );
     Ok(())
 }
 
-fn forward_data(from: &mut types::SockTarget, to: &mut types::SockTarget) -> Result<bool> {
-    let mut buffer = [0u8; MAX_CLIENT_BUFFER];
-    let mut has_pending_reply = false;
-    loop {
-        let read = match from.stream.read(&mut buffer) {
-            Ok(read) => {
-                if read == 0 {
-                    break;
-                }
-                read
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                break;
-            }
-            Err(e) => return Err(e.into()),
-        };
-        log::trace!("Send {} bytes from \"{}\" to \"{}\"", read, from.id, to.id);
-        to.stream.write(&buffer[..read])?;
-        has_pending_reply = true;
-    }
-    Ok(has_pending_reply)
+fn forward_data(
+    from: &mut types::SockTarget,
+    to: &mut types::SockTarget,
+    buffer: &mut [u8],
+) -> Result<bool> {
+    let read = match from.stream.read(buffer) {
+        Ok(0) => return Ok(true),
+        Ok(read) => read,
+        Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+
+    log::trace!("Send {} bytes from \"{}\" to \"{}\"", read, from.id, to.id);
+
+    to.stream.write_all(&buffer[..read])?;
+    Ok(false)
 }
