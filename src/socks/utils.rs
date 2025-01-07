@@ -1,10 +1,12 @@
 use crate::socks::result::Result;
 use crate::socks::types::{Socks5ErrCode, SocksAddrType, SocksProtocol};
 use crate::socks::Error;
-use std::io::{Read, Write};
-use std::net::TcpStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-pub fn send_socks5_error(stream: &mut TcpStream, code: impl Into<Socks5ErrCode>) -> Result<()> {
+pub async fn send_socks5_error(
+    stream: &mut tokio::net::TcpStream,
+    code: impl Into<Socks5ErrCode>,
+) -> Result<()> {
     let buffer = [
         SocksProtocol::SOCKS5.value(),
         code.into().value(),
@@ -17,14 +19,14 @@ pub fn send_socks5_error(stream: &mut TcpStream, code: impl Into<Socks5ErrCode>)
         0, // port
         0,
     ];
-    stream.write_all(&buffer)?;
+    stream.write_all(&buffer).await?;
     Ok(())
 }
 
-pub fn read_utf8_str(stream: &mut TcpStream) -> Result<String> {
+pub async fn read_utf8_str(stream: &mut tokio::net::TcpStream) -> Result<String> {
     let mut length = [0u8];
-    stream.read_exact(&mut length)?;
+    stream.read_exact(&mut length).await?;
     let mut content = vec![0u8; length[0] as usize];
-    stream.read_exact(&mut content)?;
+    stream.read_exact(&mut content).await?;
     String::from_utf8(content).or(Err(Error::BadString))
 }

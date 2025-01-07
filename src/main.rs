@@ -77,7 +77,8 @@ fn u8_to_log_level(value: u8) -> log::LevelFilter {
     }
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
     if args.verbosity > 0 {
         std::env::set_var(
@@ -87,7 +88,7 @@ fn main() -> Result<()> {
     }
 
     env_logger::init();
-    if let Err(e) = run(args.into()) {
+    if let Err(e) = run(args.into()).await {
         log::error!("{:?}", e);
         std::process::exit(1);
     }

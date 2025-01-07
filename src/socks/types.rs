@@ -3,7 +3,6 @@ use crate::socks::result::Result;
 use std::collections::HashSet;
 use std::io;
 use std::io::{BufRead, BufReader};
-use std::net::TcpStream;
 use std::path::PathBuf;
 
 // Описание протокола https://datatracker.ietf.org/doc/html/rfc1928
@@ -147,7 +146,7 @@ impl SocksAuthMethod {
 
 pub struct SockTarget {
     pub id: StreamId,
-    pub stream: TcpStream,
+    pub stream: tokio::net::TcpStream,
 }
 
 pub struct Credentials {

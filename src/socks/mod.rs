@@ -3,17 +3,15 @@ mod result;
 mod types;
 mod utils;
 
-use crate::proxy::Proxy;
 pub use error::Error;
 use log;
 pub use result::Result;
 use std::io;
-use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
-use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const MAX_CLIENT_BUFFER: usize = 1024;
+const MAX_CLIENT_BUFFER: usize = 1 << 20;
 
 pub struct SocksProxy {
     auth: types::SocksAuthMethod,
@@ -28,14 +26,16 @@ impl SocksProxy {
         };
         Ok(SocksProxy { auth })
     }
-}
-impl Proxy for SocksProxy {
-    fn accept_stream(&self, mut stream: TcpStream) -> crate::Result<()> {
-        let target = handshake_socks5(&mut stream, &self.auth).map_err(|e| {
+
+    pub async fn accept_stream(&self, mut stream: tokio::net::TcpStream) -> Result<()> {
+        let target = handshake_socks5(&mut stream, &self.auth).await;
+        if let Err(e) = target {
             utils::send_socks5_error(&mut stream, &e)
+                .await
                 .unwrap_or_else(|_| log::error!("Failed to send SOCKS5 error code"));
-            e
-        })?;
+            return Err(e);
+        };
+        let target = target?;
 
         let mut from = types::SockTarget {
             id: stream.peer_addr()?.to_string(),
@@ -45,7 +45,7 @@ impl Proxy for SocksProxy {
             id: target.peer_addr()?.to_string(),
             stream: target,
         };
-        communicate_streams(&mut from, &mut to)?;
+        communicate_streams(&mut from, &mut to).await?;
 
         log::info!("Successfully finished connection with \"{}\"", from.id);
         Ok(())
@@ -55,27 +55,32 @@ impl Proxy for SocksProxy {
 /// Initiate SOCKS handshake communication. The provided `stream` will be advanced
 /// to read and send protocol details. See more about
 /// [protocol specification](https://datatracker.ietf.org/doc/html/rfc1928).
-fn handshake_socks5(stream: &mut TcpStream, auth: &types::SocksAuthMethod) -> Result<TcpStream> {
-    let (proto, methods) = start_socks5_handshake(stream)?;
+async fn handshake_socks5(
+    stream: &mut tokio::net::TcpStream,
+    auth: &types::SocksAuthMethod,
+) -> Result<tokio::net::TcpStream> {
+    let (proto, methods) = start_socks5_handshake(stream).await?;
     if proto != types::SocksProtocol::SOCKS5 {
         return Err(Error::SocksProtocolVersionNotSupported(proto.value()));
     }
-    handle_socks5_auth(&proto, &methods, stream, auth)?;
-    finish_socks5_handshake(&proto, stream)
+    handle_socks5_auth(&proto, &methods, stream, auth).await?;
+    finish_socks5_handshake(&proto, stream).await
 }
 
 /// Advances `stream` to read SOCKS version and available authentication methods
 /// on client side.
-fn start_socks5_handshake(stream: &mut TcpStream) -> Result<(types::SocksProtocol, Vec<u8>)> {
+async fn start_socks5_handshake(
+    stream: &mut tokio::net::TcpStream,
+) -> Result<(types::SocksProtocol, Vec<u8>)> {
     log::info!("Start SOCKS handshake");
 
     let mut protocol_line = [0u8; 2];
-    stream.read_exact(&mut protocol_line)?;
+    stream.read_exact(&mut protocol_line).await?;
 
     let protocol: types::SocksProtocol = protocol_line[0].try_into()?;
     log::trace!("Got SOCKS version: {}", protocol.value());
     let mut auth_methods = vec![0u8; protocol_line[1] as usize];
-    stream.read_exact(&mut auth_methods)?;
+    stream.read_exact(&mut auth_methods).await?;
 
     log::trace!("Got auth methods: {:?}", auth_methods);
 
@@ -84,10 +89,10 @@ fn start_socks5_handshake(stream: &mut TcpStream) -> Result<(types::SocksProtoco
 
 /// Set authentication method required by SOCKS server to client, writing to the `stream`
 /// details about chosen authentication method `auth`.
-fn handle_socks5_auth(
+async fn handle_socks5_auth(
     protocol: &types::SocksProtocol,
     auth_methods: &Vec<u8>,
-    stream: &mut TcpStream,
+    stream: &mut tokio::net::TcpStream,
     auth: &types::SocksAuthMethod,
 ) -> Result<()> {
     log::info!("Set authentication method \"{}\"", auth.value(),);
@@ -95,39 +100,39 @@ fn handle_socks5_auth(
         return Err(Error::SockAuthMethodNotSupportedByClient);
     }
     // Select auth method
-    stream.write(&[protocol.value(), auth.value()])?;
+    stream.write(&[protocol.value(), auth.value()]).await?;
     match auth {
         types::SocksAuthMethod::NoAuth => Ok(()),
         types::SocksAuthMethod::Credentials { provider } => {
-            if let Err(e) = socks5_credential_authentication(stream, provider) {
-                stream.write(&[
-                    types::CREDENTIAL_AUTH_VERSION,
-                    types::Socks5ErrCode::from(&e).value(),
-                ])?;
-                Err(e)
-            } else {
-                stream.write(&[types::CREDENTIAL_AUTH_VERSION, types::SUCCESS_CODE])?;
-                Ok(())
+            let mut result = Ok(());
+            let mut result_code = types::SUCCESS_CODE;
+            if let Err(e) = socks5_credential_authentication(stream, provider).await {
+                result_code = types::Socks5ErrCode::from(&e).value();
+                result = Err(e)
             }
+            stream
+                .write(&[types::CREDENTIAL_AUTH_VERSION, result_code])
+                .await?;
+            result
         }
     }
 }
 
 /// Advances `stream` to read client credentials and authenticate client with them.
 /// See more about [protocol specification](https://datatracker.ietf.org/doc/html/rfc1929).
-fn socks5_credential_authentication(
-    stream: &mut TcpStream,
+async fn socks5_credential_authentication(
+    stream: &mut tokio::net::TcpStream,
     auth_provider: &types::Credentials,
 ) -> Result<()> {
     log::info!("Starting credential authentication");
     let mut version = [0u8];
-    stream.read_exact(&mut version)?;
+    stream.read_exact(&mut version).await?;
 
-    let username = utils::read_utf8_str(stream)?;
+    let username = utils::read_utf8_str(stream).await?;
 
     log::trace!("Got username");
 
-    let password = utils::read_utf8_str(stream)?;
+    let password = utils::read_utf8_str(stream).await?;
 
     log::trace!("Got password");
 
@@ -141,14 +146,14 @@ fn socks5_credential_authentication(
 }
 
 /// Advances `stream` if server successfully establish connection with requested target.
-fn finish_socks5_handshake(
+async fn finish_socks5_handshake(
     protocol: &types::SocksProtocol,
-    stream: &mut TcpStream,
-) -> Result<TcpStream> {
-    let addr = read_request_details(stream)?;
+    stream: &mut tokio::net::TcpStream,
+) -> Result<tokio::net::TcpStream> {
+    let addr = read_request_details(stream).await?;
 
     log::info!("Connecting to \"{}\"", addr);
-    let target_stream = TcpStream::connect(addr)?;
+    let target_stream = tokio::net::TcpStream::connect(addr).await?;
     let peer = target_stream.local_addr()?;
 
     let mut octets = vec![];
@@ -173,43 +178,43 @@ fn finish_socks5_handshake(
     response.extend_from_slice(&peer.port().to_be_bytes());
 
     log::trace!("Send success SOCKS5: \"{:?}\"", response);
-    stream.write_all(&response)?;
+    stream.write_all(&response).await?;
 
     log::info!("Successful handshake");
     Ok(target_stream)
 }
 
 /// Advances `stream` to read details about request target domain.
-fn read_request_details(stream: &mut TcpStream) -> Result<SocketAddr> {
+async fn read_request_details(stream: &mut tokio::net::TcpStream) -> Result<SocketAddr> {
     let mut protocol_version = [0u8];
-    stream.read_exact(&mut protocol_version)?;
+    stream.read_exact(&mut protocol_version).await?;
 
     let cmd: types::SocksCMD = {
         let mut buff = [0u8];
-        stream.read_exact(&mut buff)?;
+        stream.read_exact(&mut buff).await?;
         buff[0].try_into()?
     };
 
     log::trace!("Got cmd: {}", cmd.value());
 
     // reserved
-    stream.read_exact(&mut [0u8])?;
+    stream.read_exact(&mut [0u8]).await?;
 
     let addr_type: types::SocksAddrType = {
         let mut buff = [0u8];
-        stream.read_exact(&mut buff)?;
+        stream.read_exact(&mut buff).await?;
         buff[0].try_into()?
     };
 
     log::trace!("Got address type: {}", addr_type.value(),);
 
-    let addr = read_address(stream, &addr_type)?;
+    let addr = read_address(stream, &addr_type).await?;
 
     log::trace!("Got address: {}", addr);
 
     let port = {
         let mut buff = [0u8; 2];
-        stream.read_exact(&mut buff)?;
+        stream.read_exact(&mut buff).await?;
         u16::from_be_bytes(buff)
     };
 
@@ -220,69 +225,72 @@ fn read_request_details(stream: &mut TcpStream) -> Result<SocketAddr> {
 
 /// Advances `stream` to read address and port of a requested target using `address_type`
 /// to recognize address format.
-fn read_address(stream: &mut TcpStream, address_type: &types::SocksAddrType) -> Result<IpAddr> {
+async fn read_address(
+    stream: &mut tokio::net::TcpStream,
+    address_type: &types::SocksAddrType,
+) -> Result<IpAddr> {
     match address_type {
         types::SocksAddrType::IPV4 => {
             let mut octets = [0u8; 4];
-            stream.read_exact(&mut octets)?;
+            stream.read_exact(&mut octets).await?;
             Ok(IpAddr::V4(Ipv4Addr::from(octets)))
         }
         types::SocksAddrType::IPV6 => {
             let mut octets = [0u8; 16];
-            stream.read_exact(&mut octets)?;
+            stream.read_exact(&mut octets).await?;
             Ok(IpAddr::V6(Ipv6Addr::from(octets)))
         }
     }
 }
 
 /// Initiate communication between client and target connections.
-fn communicate_streams(from: &mut types::SockTarget, to: &mut types::SockTarget) -> Result<()> {
-    to.stream
-        .set_read_timeout(Some(Duration::from_millis(100)))?;
-    from.stream
-        .set_read_timeout(Some(Duration::from_millis(100)))?;
-
-    to.stream
-        .set_read_timeout(Some(Duration::from_millis(100)))?;
-
-    from.stream
-        .set_read_timeout(Some(Duration::from_millis(100)))?;
-
+async fn communicate_streams(
+    from: &mut types::SockTarget,
+    to: &mut types::SockTarget,
+) -> Result<()> {
     log::info!(
         "Start communication between client \"{}\" and target \"{}\"",
         from.id,
         to.id
     );
+    let mut client_buffer = vec![0u8; MAX_CLIENT_BUFFER];
+    let mut target_buffer = vec![0u8; MAX_CLIENT_BUFFER];
 
     loop {
-        let r1 = forward_data(from, to)?;
-        let r2 = forward_data(to, from)?;
-        if !r1 && !r2 {
-            break;
+        tokio::select! {
+            cr = from.stream.read(&mut client_buffer) => {
+                let is_done = forward_data(cr, to, &mut client_buffer).await?;
+                if is_done {
+                    break;
+                }
+            }
+            tr = to.stream.read(&mut target_buffer) => {
+                forward_data(tr, from, &mut target_buffer).await?;
+            }
         }
     }
+    log::info!(
+        "Finish communication between client \"{}\" and target \"{}\"",
+        from.id,
+        to.id
+    );
     Ok(())
 }
 
-fn forward_data(from: &mut types::SockTarget, to: &mut types::SockTarget) -> Result<bool> {
-    let mut buffer = [0u8; MAX_CLIENT_BUFFER];
-    let mut has_pending_reply = false;
-    loop {
-        let read = match from.stream.read(&mut buffer) {
-            Ok(read) => {
-                if read == 0 {
-                    break;
-                }
-                read
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                break;
-            }
-            Err(e) => return Err(e.into()),
-        };
-        log::trace!("Send {} bytes from \"{}\" to \"{}\"", read, from.id, to.id);
-        to.stream.write(&buffer[..read])?;
-        has_pending_reply = true;
-    }
-    Ok(has_pending_reply)
+async fn forward_data(
+    data: core::result::Result<usize, io::Error>,
+    to: &mut types::SockTarget,
+    buffer: &mut [u8],
+) -> Result<bool> {
+    let read = match data {
+        Ok(0) => return Ok(true),
+        Ok(read) => read,
+        Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+
+    log::trace!("Send {} bytes to \"{}\"", read, to.id);
+
+    to.stream.write_all(&buffer[..read]).await?;
+    Ok(false)
 }
