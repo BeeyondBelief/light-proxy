@@ -53,8 +53,7 @@ impl SocksProxy {
 }
 
 /// Initiate SOCKS handshake communication. The provided `stream` will be advanced
-/// to read and send protocol details. See more about
-/// [protocol specification](https://datatracker.ietf.org/doc/html/rfc1928).
+/// to read and send protocol details.
 async fn handshake_socks(
     stream: &mut tokio::net::TcpStream,
     auth: &types::SocksAuthMethod,
@@ -79,6 +78,7 @@ async fn start_socks_handshake(stream: &mut tokio::net::TcpStream) -> Result<typ
     log::trace!("Got SOCKS version: {}", protocol_line[0]);
 
     let proto_box = match protocol_line[0] {
+        // See more about protocol specification at (https://datatracker.ietf.org/doc/html/rfc1928)
         types::SOCKS5_VERSION => {
             let mut auth_methods = vec![0u8; protocol_line[1] as usize];
             stream.read_exact(&mut auth_methods).await?;
@@ -93,7 +93,8 @@ async fn start_socks_handshake(stream: &mut tokio::net::TcpStream) -> Result<typ
 }
 
 /// Set authentication method required by SOCKS server to client, writing to the `stream`
-/// details about chosen authentication method `auth`.
+/// details about chosen authentication method `auth`. Returns [`Ok`] if `stream` supports
+/// `auth`.
 async fn handle_socks5_auth(
     auth_methods: &Vec<u8>,
     stream: &mut tokio::net::TcpStream,
