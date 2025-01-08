@@ -11,24 +11,24 @@ pub const SUCCESS_CODE: u8 = 0;
 pub const CREDENTIAL_AUTH_VERSION: u8 = 1;
 
 #[derive(Debug, Eq, PartialEq)]
-pub enum SocksProtocol {
+pub enum SocksProtocolVersion {
     SOCKS5,
 }
 
-impl SocksProtocol {
+impl SocksProtocolVersion {
     pub fn value(&self) -> u8 {
         match self {
-            SocksProtocol::SOCKS5 => 5,
+            SocksProtocolVersion::SOCKS5 => 5,
         }
     }
 }
 
-impl TryFrom<u8> for SocksProtocol {
+impl TryFrom<u8> for SocksProtocolVersion {
     type Error = Error;
 
-    fn try_from(value: u8) -> Result<SocksProtocol> {
+    fn try_from(value: u8) -> Result<SocksProtocolVersion> {
         match value {
-            5 => Ok(SocksProtocol::SOCKS5),
+            5 => Ok(SocksProtocolVersion::SOCKS5),
             n => Err(Error::SocksProtocolVersionNotSupported(n)),
         }
     }

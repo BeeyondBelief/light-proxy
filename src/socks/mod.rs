@@ -60,7 +60,7 @@ async fn handshake_socks5(
     auth: &types::SocksAuthMethod,
 ) -> Result<tokio::net::TcpStream> {
     let (proto, methods) = start_socks5_handshake(stream).await?;
-    if proto != types::SocksProtocol::SOCKS5 {
+    if proto != types::SocksProtocolVersion::SOCKS5 {
         return Err(Error::SocksProtocolVersionNotSupported(proto.value()));
     }
     handle_socks5_auth(&proto, &methods, stream, auth).await?;
@@ -71,13 +71,13 @@ async fn handshake_socks5(
 /// on client side.
 async fn start_socks5_handshake(
     stream: &mut tokio::net::TcpStream,
-) -> Result<(types::SocksProtocol, Vec<u8>)> {
+) -> Result<(types::SocksProtocolVersion, Vec<u8>)> {
     log::info!("Start SOCKS handshake");
 
     let mut protocol_line = [0u8; 2];
     stream.read_exact(&mut protocol_line).await?;
 
-    let protocol: types::SocksProtocol = protocol_line[0].try_into()?;
+    let protocol: types::SocksProtocolVersion = protocol_line[0].try_into()?;
     log::trace!("Got SOCKS version: {}", protocol.value());
     let mut auth_methods = vec![0u8; protocol_line[1] as usize];
     stream.read_exact(&mut auth_methods).await?;
@@ -90,7 +90,7 @@ async fn start_socks5_handshake(
 /// Set authentication method required by SOCKS server to client, writing to the `stream`
 /// details about chosen authentication method `auth`.
 async fn handle_socks5_auth(
-    protocol: &types::SocksProtocol,
+    protocol: &types::SocksProtocolVersion,
     auth_methods: &Vec<u8>,
     stream: &mut tokio::net::TcpStream,
     auth: &types::SocksAuthMethod,
@@ -147,7 +147,7 @@ async fn socks5_credential_authentication(
 
 /// Advances `stream` if server successfully establish connection with requested target.
 async fn finish_socks5_handshake(
-    protocol: &types::SocksProtocol,
+    protocol: &types::SocksProtocolVersion,
     stream: &mut tokio::net::TcpStream,
 ) -> Result<tokio::net::TcpStream> {
     let addr = read_request_details(stream).await?;
