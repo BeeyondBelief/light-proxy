@@ -4,12 +4,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 mod error;
-pub mod socks;
+pub mod socks5;
 
 pub use self::error::{Error, Result};
 
 pub enum ProxyMode {
-    SOCKS { credentials_file: Option<PathBuf> },
+    SOCKS5 { credentials_file: Option<PathBuf> },
 }
 
 pub struct ExecuteConfig {
@@ -18,7 +18,7 @@ pub struct ExecuteConfig {
 }
 
 enum ProxyImpl {
-    SOCKS(socks::SocksProxy),
+    SOCKS5(socks5::Socks5Proxy),
 }
 
 pub async fn run(cfg: ExecuteConfig) -> Result<()> {
@@ -26,22 +26,24 @@ pub async fn run(cfg: ExecuteConfig) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(cfg.listen_address).await?;
 
     let mode_handle: Arc<ProxyImpl> = match cfg.mode {
-        ProxyMode::SOCKS { credentials_file } => {
-            Arc::new(ProxyImpl::SOCKS(socks::SocksProxy::new(credentials_file)?))
-        }
+        ProxyMode::SOCKS5 { credentials_file } => Arc::new(ProxyImpl::SOCKS5(
+            socks5::Socks5Proxy::new(credentials_file)?,
+        )),
     };
 
     log::debug!("Waiting for connections");
     loop {
-        let (stream, _) = listener.accept().await?;
-
+        let (stream, addr) = listener.accept().await?;
+        log::info!("Accepted connection from \"{}\"", addr);
         let handle = Arc::clone(&mode_handle);
         tokio::spawn(async move {
+            log::debug!("Processing connection \"{}\"", addr);
             if let Err(e) = match handle.as_ref() {
-                ProxyImpl::SOCKS(mode) => mode.accept_stream(stream).await,
+                ProxyImpl::SOCKS5(mode) => mode.accept_stream(stream).await,
             } {
                 log::error!("Error during connection handling: {:?}", e);
             }
+            log::info!("Connection closed \"{}\"", addr);
         });
     }
 }

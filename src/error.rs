@@ -8,7 +8,7 @@ pub enum Error {
     UnknownMode,
 
     #[from]
-    SOCKS(crate::socks::Error),
+    SOCKS(crate::socks5::Error),
 
     #[from]
     IO(std::io::Error),

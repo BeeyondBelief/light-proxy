@@ -1,5 +1,5 @@
-use crate::socks::error::Error;
-use crate::socks::result::Result;
+use crate::socks5::error::Error;
+use crate::socks5::result::Result;
 use std::collections::HashSet;
 use std::io;
 use std::io::{BufRead, BufReader};
@@ -11,10 +11,6 @@ pub const SUCCESS_CODE: u8 = 0;
 pub const CREDENTIAL_AUTH_VERSION: u8 = 1;
 
 pub const SOCKS5_VERSION: u8 = 5;
-
-pub enum SocksProtocol {
-    SOCKS5 { auth_methods: Vec<u8> },
-}
 
 pub enum SocksCMD {
     CONNECT,
@@ -124,11 +120,6 @@ impl SocksAuthMethod {
             SocksAuthMethod::Credentials { provider: _ } => 2,
         }
     }
-}
-
-pub struct SockTarget {
-    pub id: StreamId,
-    pub stream: tokio::net::TcpStream,
 }
 
 pub struct Credentials {

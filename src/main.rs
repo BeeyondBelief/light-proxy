@@ -5,21 +5,20 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Run with SOCKS protocol for proxy connections", long_about = None)]
+#[command(version, about = "Run with SOCKS5 protocol for proxy connections", long_about = None)]
 struct SocksArgs {
     #[arg(
         short = 'f',
         long,
         help = "Path to the file where user credentials are stored. Format of a files is: \
-            <user:password\n> or just <user:\n> in the second case <user:> means an access token. \
-            The file only used for SOCKS5 connections."
+            <user:password\n> or just <user:\n> in the second case <user:> means an access token"
     )]
     credentials_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    Socks(SocksArgs),
+    Socks5(SocksArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -56,7 +55,7 @@ struct Args {
 impl Into<ExecuteConfig> for Args {
     fn into(self) -> ExecuteConfig {
         let mode = match self.command {
-            Commands::Socks(args) => ProxyMode::SOCKS {
+            Commands::Socks5(args) => ProxyMode::SOCKS5 {
                 credentials_file: args.credentials_file,
             },
         };

@@ -1,6 +1,6 @@
-use crate::socks::result::Result;
-use crate::socks::types::{Socks5ErrCode, SocksAddrType, SOCKS5_VERSION};
-use crate::socks::Error;
+use crate::socks5::result::Result;
+use crate::socks5::types::{Socks5ErrCode, SocksAddrType, SOCKS5_VERSION};
+use crate::socks5::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub async fn send_socks5_error(
