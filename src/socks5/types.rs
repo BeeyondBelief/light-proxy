@@ -29,7 +29,7 @@ impl TryFrom<u8> for SocksCMD {
     fn try_from(value: u8) -> Result<SocksCMD> {
         match value {
             1 => Ok(SocksCMD::CONNECT),
-            _ => Err(Error::SocksCMDNotSupported),
+            n => Err(Error::SocksCMDNotSupported(n)),
         }
     }
 }
@@ -65,7 +65,7 @@ impl Socks5ErrCode {
 impl From<&Error> for Socks5ErrCode {
     fn from(value: &Error) -> Self {
         match value {
-            Error::SocksCMDNotSupported => Socks5ErrCode::CommandUnsupported,
+            Error::SocksCMDNotSupported(_) => Socks5ErrCode::CommandUnsupported,
             Error::SocksAddrTypeNotSupported => Socks5ErrCode::AddressTypeNotSupported,
             Error::SockAuthMethodNotSupportedByClient => Socks5ErrCode::AuthMethodNotSupported,
             Error::SocksBadCredentialsProvided => Socks5ErrCode::ConnectionNotAllowed,

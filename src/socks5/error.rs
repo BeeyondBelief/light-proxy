@@ -4,7 +4,7 @@ use derive_more::{Display, From};
 #[derive(Debug, From, Display)]
 pub enum Error {
     SocksProtocolVersionNotSupported(u8),
-    SocksCMDNotSupported,
+    SocksCMDNotSupported(u8),
     SocksAddrTypeNotSupported,
     SocksBadProtocol,
     SockAuthMethodNotSupportedByClient,

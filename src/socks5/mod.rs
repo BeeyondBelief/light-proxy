@@ -139,7 +139,7 @@ async fn finish_socks5_handshake(
 ) -> Result<tokio::net::TcpStream> {
     let addr = read_request_details(stream).await?;
 
-    log::info!("Connecting to \"{}\"", addr);
+    log::info!("Connecting to target \"{}\"", addr);
     let target_stream = tokio::net::TcpStream::connect(addr).await?;
     let peer = target_stream.local_addr()?;
 
@@ -173,31 +173,31 @@ async fn finish_socks5_handshake(
 
 /// Advances `stream` to read details about request target domain.
 async fn read_request_details(stream: &mut tokio::net::TcpStream) -> Result<SocketAddr> {
-    let mut protocol_version = [0u8];
-    stream.read_exact(&mut protocol_version).await?;
+    let mut spec = [0u8; 4];
+    stream.read_exact(&mut spec).await?;
 
-    let cmd: types::SocksCMD = {
-        let mut buff = [0u8];
-        stream.read_exact(&mut buff).await?;
-        buff[0].try_into()?
+    let cmd = types::SocksCMD::try_from(spec[1])?;
+
+    log::trace!("CMD: {}", cmd.value());
+
+    let addr_type = types::SocksAddrType::try_from(spec[3])?;
+
+    log::trace!("Target address type: {}", addr_type.value());
+
+    let addr = match addr_type {
+        types::SocksAddrType::IPV4 => {
+            let mut octets = [0u8; 4];
+            stream.read_exact(&mut octets).await?;
+            IpAddr::V4(Ipv4Addr::from(octets))
+        }
+        types::SocksAddrType::IPV6 => {
+            let mut octets = [0u8; 16];
+            stream.read_exact(&mut octets).await?;
+            IpAddr::V6(Ipv6Addr::from(octets))
+        }
     };
 
-    log::trace!("Got cmd: {}", cmd.value());
-
-    // reserved
-    stream.read_exact(&mut [0u8]).await?;
-
-    let addr_type: types::SocksAddrType = {
-        let mut buff = [0u8];
-        stream.read_exact(&mut buff).await?;
-        buff[0].try_into()?
-    };
-
-    log::trace!("Got address type: {}", addr_type.value(),);
-
-    let addr = read_address(stream, &addr_type).await?;
-
-    log::trace!("Got address: {}", addr);
+    log::trace!("Target address: {}", addr);
 
     let port = {
         let mut buff = [0u8; 2];
@@ -205,29 +205,9 @@ async fn read_request_details(stream: &mut tokio::net::TcpStream) -> Result<Sock
         u16::from_be_bytes(buff)
     };
 
-    log::trace!("Got port: {}", port);
+    log::trace!("Target port: {}", port);
 
     Ok(SocketAddr::new(addr, port))
-}
-
-/// Advances `stream` to read address and port of a requested target using `address_type`
-/// to recognize address format.
-async fn read_address(
-    stream: &mut tokio::net::TcpStream,
-    address_type: &types::SocksAddrType,
-) -> Result<IpAddr> {
-    match address_type {
-        types::SocksAddrType::IPV4 => {
-            let mut octets = [0u8; 4];
-            stream.read_exact(&mut octets).await?;
-            Ok(IpAddr::V4(Ipv4Addr::from(octets)))
-        }
-        types::SocksAddrType::IPV6 => {
-            let mut octets = [0u8; 16];
-            stream.read_exact(&mut octets).await?;
-            Ok(IpAddr::V6(Ipv6Addr::from(octets)))
-        }
-    }
 }
 
 /// Initiate communication between client and target connections.
