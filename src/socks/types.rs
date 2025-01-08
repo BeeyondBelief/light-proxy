@@ -10,28 +10,10 @@ pub type StreamId = String;
 pub const SUCCESS_CODE: u8 = 0;
 pub const CREDENTIAL_AUTH_VERSION: u8 = 1;
 
-#[derive(Debug, Eq, PartialEq)]
-pub enum SocksProtocolVersion {
-    SOCKS5,
-}
+pub const SOCKS5_VERSION: u8 = 5;
 
-impl SocksProtocolVersion {
-    pub fn value(&self) -> u8 {
-        match self {
-            SocksProtocolVersion::SOCKS5 => 5,
-        }
-    }
-}
-
-impl TryFrom<u8> for SocksProtocolVersion {
-    type Error = Error;
-
-    fn try_from(value: u8) -> Result<SocksProtocolVersion> {
-        match value {
-            5 => Ok(SocksProtocolVersion::SOCKS5),
-            n => Err(Error::SocksProtocolVersionNotSupported(n)),
-        }
-    }
+pub enum SocksProtocol {
+    SOCKS5 { auth_methods: Vec<u8> },
 }
 
 pub enum SocksCMD {

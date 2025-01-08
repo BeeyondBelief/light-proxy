@@ -1,5 +1,5 @@
 use crate::socks::result::Result;
-use crate::socks::types::{Socks5ErrCode, SocksAddrType, SocksProtocolVersion};
+use crate::socks::types::{Socks5ErrCode, SocksAddrType, SOCKS5_VERSION};
 use crate::socks::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -8,7 +8,7 @@ pub async fn send_socks5_error(
     code: impl Into<Socks5ErrCode>,
 ) -> Result<()> {
     let buffer = [
-        SocksProtocolVersion::SOCKS5.value(),
+        SOCKS5_VERSION,
         code.into().value(),
         0, // reserved
         SocksAddrType::IPV4.value(),

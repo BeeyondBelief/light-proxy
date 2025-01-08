@@ -28,7 +28,7 @@ impl SocksProxy {
     }
 
     pub async fn accept_stream(&self, mut stream: tokio::net::TcpStream) -> Result<()> {
-        let target = handshake_socks5(&mut stream, &self.auth).await;
+        let target = handshake_socks(&mut stream, &self.auth).await;
         if let Err(e) = target {
             utils::send_socks5_error(&mut stream, &e)
                 .await
@@ -55,42 +55,46 @@ impl SocksProxy {
 /// Initiate SOCKS handshake communication. The provided `stream` will be advanced
 /// to read and send protocol details. See more about
 /// [protocol specification](https://datatracker.ietf.org/doc/html/rfc1928).
-async fn handshake_socks5(
+async fn handshake_socks(
     stream: &mut tokio::net::TcpStream,
     auth: &types::SocksAuthMethod,
 ) -> Result<tokio::net::TcpStream> {
-    let (proto, methods) = start_socks5_handshake(stream).await?;
-    if proto != types::SocksProtocolVersion::SOCKS5 {
-        return Err(Error::SocksProtocolVersionNotSupported(proto.value()));
-    }
-    handle_socks5_auth(&proto, &methods, stream, auth).await?;
-    finish_socks5_handshake(&proto, stream).await
+    let proto = start_socks_handshake(stream).await?;
+    let stream = match proto {
+        types::SocksProtocol::SOCKS5 { auth_methods } => {
+            handle_socks5_auth(&auth_methods, stream, auth).await?;
+            finish_socks5_handshake(stream).await?
+        }
+    };
+    Ok(stream)
 }
 
-/// Advances `stream` to read SOCKS version and available authentication methods
-/// on client side.
-async fn start_socks5_handshake(
-    stream: &mut tokio::net::TcpStream,
-) -> Result<(types::SocksProtocolVersion, Vec<u8>)> {
+/// Advances `stream` to read SOCKS version and its protocol data
+async fn start_socks_handshake(stream: &mut tokio::net::TcpStream) -> Result<types::SocksProtocol> {
     log::info!("Start SOCKS handshake");
 
     let mut protocol_line = [0u8; 2];
     stream.read_exact(&mut protocol_line).await?;
 
-    let protocol: types::SocksProtocolVersion = protocol_line[0].try_into()?;
-    log::trace!("Got SOCKS version: {}", protocol.value());
-    let mut auth_methods = vec![0u8; protocol_line[1] as usize];
-    stream.read_exact(&mut auth_methods).await?;
+    log::trace!("Got SOCKS version: {}", protocol_line[0]);
 
-    log::trace!("Got auth methods: {:?}", auth_methods);
+    let proto_box = match protocol_line[0] {
+        types::SOCKS5_VERSION => {
+            let mut auth_methods = vec![0u8; protocol_line[1] as usize];
+            stream.read_exact(&mut auth_methods).await?;
 
-    Ok((protocol, auth_methods))
+            log::trace!("Got auth methods: {:?}", auth_methods);
+            types::SocksProtocol::SOCKS5 { auth_methods }
+        }
+        v => return Err(Error::SocksProtocolVersionNotSupported(v)),
+    };
+
+    Ok(proto_box)
 }
 
 /// Set authentication method required by SOCKS server to client, writing to the `stream`
 /// details about chosen authentication method `auth`.
 async fn handle_socks5_auth(
-    protocol: &types::SocksProtocolVersion,
     auth_methods: &Vec<u8>,
     stream: &mut tokio::net::TcpStream,
     auth: &types::SocksAuthMethod,
@@ -100,7 +104,7 @@ async fn handle_socks5_auth(
         return Err(Error::SockAuthMethodNotSupportedByClient);
     }
     // Select auth method
-    stream.write(&[protocol.value(), auth.value()]).await?;
+    stream.write(&[types::SOCKS5_VERSION, auth.value()]).await?;
     match auth {
         types::SocksAuthMethod::NoAuth => Ok(()),
         types::SocksAuthMethod::Credentials { provider } => {
@@ -147,7 +151,6 @@ async fn socks5_credential_authentication(
 
 /// Advances `stream` if server successfully establish connection with requested target.
 async fn finish_socks5_handshake(
-    protocol: &types::SocksProtocolVersion,
     stream: &mut tokio::net::TcpStream,
 ) -> Result<tokio::net::TcpStream> {
     let addr = read_request_details(stream).await?;
@@ -169,7 +172,7 @@ async fn finish_socks5_handshake(
         }
     }
     let mut response = vec![
-        protocol.value(),
+        types::SOCKS5_VERSION,
         0,
         0, // reserved
         ip_ver,
