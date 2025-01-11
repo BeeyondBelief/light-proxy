@@ -10,6 +10,10 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+// SOCKS5 handshake with credentials can allocate maximum 255 bytes at once
+const MIN_BUFFER_SIZE: usize = 255;
+const ANONIMUS_CLIENT_NAME: &'static str = "unknown";
+
 pub struct Socks5Proxy {
     auth: types::SocksAuthMethod,
 }
@@ -25,41 +29,41 @@ impl Socks5Proxy {
     }
 
     pub async fn accept_stream(&self, mut stream: tokio::net::TcpStream) -> Result<()> {
-        let target = handshake_socks5(&mut stream, &self.auth).await;
-        if let Err(e) = target {
-            utils::send_socks5_error(&mut stream, &e)
-                .await
-                .unwrap_or_else(|_| log::error!("Failed to send SOCKS5 error code"));
-            return Err(e);
-        };
-        let mut target = target?;
+        match handshake_socks5(&mut stream, &self.auth).await {
+            Ok((client_name, mut target)) => {
+                let target_name = target.peer_addr()?.to_string();
 
-        let client_name = stream.peer_addr()?.to_string();
-        let target_name = target.peer_addr()?.to_string();
+                log::info!(
+                    "Start bidirectional communication between \"{}\" and \"{}\"",
+                    client_name,
+                    target_name
+                );
 
-        log::info!(
-            "Start bidirectional communication between \"{}\" and \"{}\"",
-            client_name,
-            target_name
-        );
+                let (client_sent, target_sent) =
+                    tokio::io::copy_bidirectional(&mut stream, &mut target).await?;
 
-        let (client_sent, target_sent) =
-            tokio::io::copy_bidirectional(&mut stream, &mut target).await?;
+                log::debug!(
+                    "Client \"{}\" sent: {}. Bytes sent from \"{}\": {}",
+                    client_name,
+                    client_sent,
+                    target_name,
+                    target_sent
+                );
 
-        log::debug!(
-            "Bytes sent from \"{}\" {}. Bytes sent from \"{}\": {}",
-            client_name,
-            client_sent,
-            target_name,
-            target_sent
-        );
-
-        log::info!(
-            "End communication between \"{}\" and \"{}\"",
-            client_name,
-            target_name
-        );
-        Ok(())
+                log::info!(
+                    "End communication between \"{}\" and \"{}\"",
+                    client_name,
+                    target_name
+                );
+                Ok(())
+            }
+            Err(e) => {
+                utils::send_socks5_error(&mut stream, &e)
+                    .await
+                    .unwrap_or_else(|_| log::error!("Failed to send SOCKS5 error code"));
+                Err(e)
+            }
+        }
     }
 }
 
@@ -69,19 +73,24 @@ impl Socks5Proxy {
 async fn handshake_socks5(
     stream: &mut tokio::net::TcpStream,
     auth: &types::SocksAuthMethod,
-) -> Result<tokio::net::TcpStream> {
-    // SOCKS5 handshake with credentials can allocate maximum 255 bytes at once
-    let mut buff = [0u8; 255];
-    let supported_auth = start_socks5_handshake(stream, &mut buff).await?;
-    handle_socks5_auth(&supported_auth, stream, auth, &mut buff).await?;
-    finish_socks5_handshake(stream, &mut buff).await
+) -> Result<(String, tokio::net::TcpStream)> {
+    let mut buff = [0u8; MIN_BUFFER_SIZE];
+    let supported_auth_count = start_socks5_handshake(stream, &mut buff).await?;
+    let client_name = handle_socks5_auth(stream, auth, supported_auth_count, &mut buff).await?;
+    let target = finish_socks5_handshake(stream, &mut buff).await?;
+    Ok((client_name, target))
 }
 
-/// Advances `stream` to read SOCKS5 version and its protocol data
+/// Advances `stream` to read SOCKS5 version and authentication details.
+///
+/// ## Return
+///
+/// Number of authentication methods supported by `stream`. Indexes of authentication
+/// methods will be written at the start of `buff`.
 async fn start_socks5_handshake(
     stream: &mut tokio::net::TcpStream,
     buff: &mut [u8],
-) -> Result<Vec<u8>> {
+) -> Result<usize> {
     log::info!("Start SOCKS5 handshake");
 
     stream.read_exact(&mut buff[..2]).await?;
@@ -93,20 +102,29 @@ async fn start_socks5_handshake(
     stream.read_exact(&mut buff[..length]).await?;
 
     log::trace!("Got auth methods: {:?}", &buff[..length]);
-    Ok(buff[..length].to_vec())
+    Ok(length)
 }
 
-/// Set authentication method required by SOCKS server to client, writing to the `stream`
-/// details about chosen authentication method `auth`. Returns [`Ok`] if `stream` supports
-/// `auth`.
+/// Set authentication method `auth` required by SOCKS server to `stream`.
+/// `buff` must contain indexes of authentication methods written at `buff[..supported_auth_count]`.
+///
+/// ## Panic
+///
+/// Panics if `buff` is less than 255.
+///
+/// ## Return
+///
+/// [`Ok`] if `stream` supports `auth`.
 async fn handle_socks5_auth(
-    auth_methods: &Vec<u8>,
     stream: &mut tokio::net::TcpStream,
     auth: &types::SocksAuthMethod,
+    supported_auth_count: usize,
     buff: &mut [u8],
-) -> Result<()> {
+) -> Result<String> {
+    assert!(buff.len() >= MIN_BUFFER_SIZE, "Buffer size is too small");
+
     log::debug!("Set authentication method \"{}\"", auth.value(),);
-    if !auth_methods.contains(&auth.value()) {
+    if !buff[..supported_auth_count].contains(&auth.value()) {
         return Err(Error::SockAuthMethodNotSupportedByClient);
     }
     // Select auth method
@@ -114,17 +132,20 @@ async fn handle_socks5_auth(
     buff[1] = auth.value();
     stream.write(&buff[..2]).await?;
     match auth {
-        types::SocksAuthMethod::NoAuth => Ok(()),
+        types::SocksAuthMethod::NoAuth => Ok(ANONIMUS_CLIENT_NAME.to_string()),
         types::SocksAuthMethod::Credentials { provider } => {
-            let mut result = Ok(());
+            let result;
             let mut result_code = types::SUCCESS_CODE;
-            if let Err(e) = socks5_credential_authentication(stream, provider, buff).await {
-                result_code = types::Socks5ErrCode::from(&e).value();
-                result = Err(e)
+            match socks5_credential_authentication(stream, provider, buff).await {
+                Ok(client) => result = Ok(client),
+                Err(e) => {
+                    result_code = types::Socks5ErrCode::from(&e).value();
+                    result = Err(e)
+                }
             }
-            stream
-                .write(&[types::CREDENTIAL_AUTH_VERSION, result_code])
-                .await?;
+            buff[0] = types::CREDENTIAL_AUTH_VERSION;
+            buff[1] = result_code;
+            stream.write(&buff[..2]).await?;
             result
         }
     }
@@ -136,7 +157,7 @@ async fn socks5_credential_authentication(
     stream: &mut tokio::net::TcpStream,
     auth_provider: &types::Credentials,
     buff: &mut [u8],
-) -> Result<()> {
+) -> Result<String> {
     log::debug!("Starting credential authentication");
     stream.read_exact(&mut buff[..1]).await?;
 
@@ -144,17 +165,12 @@ async fn socks5_credential_authentication(
         return Err(Error::SocksCredentialAuthVersionNotSupported(buff[0]));
     }
 
-    let username = utils::read_utf8_str(stream, buff).await?;
+    log::debug!("Reading credential");
+    let credentials = utils::read_credentials(stream, buff).await?;
 
-    log::trace!("Got username");
-
-    let password = utils::read_utf8_str(stream, buff).await?;
-
-    log::trace!("Got password");
-
-    if auth_provider.contains(&(username, password)) {
-        log::info!("Successfully authenticated client");
-        Ok(())
+    if auth_provider.contains(&credentials) {
+        log::info!("Successfully authenticated");
+        Ok(credentials.0)
     } else {
         log::warn!("Failed to authenticate");
         Err(Error::SocksBadCredentialsProvided)
