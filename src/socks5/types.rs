@@ -6,7 +6,6 @@ use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 
 // Описание протокола https://datatracker.ietf.org/doc/html/rfc1928
-pub type StreamId = String;
 pub const SUCCESS_CODE: u8 = 0;
 pub const CREDENTIAL_AUTH_VERSION: u8 = 1;
 

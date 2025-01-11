@@ -1,6 +1,5 @@
 use crate::socks5::result::Result;
 use crate::socks5::types::{Socks5ErrCode, SocksAddrType, SOCKS5_VERSION};
-use crate::socks5::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub async fn send_socks5_error(
@@ -23,10 +22,11 @@ pub async fn send_socks5_error(
     Ok(())
 }
 
-pub async fn read_utf8_str(stream: &mut tokio::net::TcpStream) -> Result<String> {
-    let mut length = [0u8];
-    stream.read_exact(&mut length).await?;
-    let mut content = vec![0u8; length[0] as usize];
-    stream.read_exact(&mut content).await?;
-    String::from_utf8(content).or(Err(Error::BadString))
+pub async fn read_utf8_str(stream: &mut tokio::net::TcpStream, buff: &mut [u8]) -> Result<String> {
+    stream.read_exact(&mut buff[..1]).await?;
+    let length = buff[0] as usize;
+    stream.read_exact(&mut buff[..length]).await?;
+    let ut8_str = String::from_utf8_lossy(&buff[..length]).to_string();
+    buff[..length].fill(0u8);
+    Ok(ut8_str)
 }
