@@ -4,12 +4,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 mod error;
+pub mod socks4;
 pub mod socks5;
 
 pub use self::error::{Error, Result};
 
 pub enum ProxyMode {
     SOCKS5 { credentials_file: Option<PathBuf> },
+    SOCKS4,
 }
 
 pub struct ExecuteConfig {
@@ -19,6 +21,7 @@ pub struct ExecuteConfig {
 
 enum ProxyImpl {
     SOCKS5(socks5::Socks5Proxy),
+    SOCKS4(socks4::Socks4Proxy),
 }
 
 pub async fn run(cfg: ExecuteConfig) -> Result<()> {
@@ -29,6 +32,7 @@ pub async fn run(cfg: ExecuteConfig) -> Result<()> {
         ProxyMode::SOCKS5 { credentials_file } => Arc::new(ProxyImpl::SOCKS5(
             socks5::Socks5Proxy::new(credentials_file)?,
         )),
+        ProxyMode::SOCKS4 => Arc::new(ProxyImpl::SOCKS4(socks4::Socks4Proxy {})),
     };
 
     log::debug!("Waiting for connections");
@@ -39,7 +43,14 @@ pub async fn run(cfg: ExecuteConfig) -> Result<()> {
         tokio::spawn(async move {
             log::debug!("Processing connection \"{}\"", addr);
             if let Err(e) = match handle.as_ref() {
-                ProxyImpl::SOCKS5(mode) => mode.accept_stream(stream).await,
+                ProxyImpl::SOCKS5(mode) => mode
+                    .accept_stream(stream)
+                    .await
+                    .map_err(|e| Err::<(), Error>(Error::from(e))),
+                ProxyImpl::SOCKS4(mode) => mode
+                    .accept_stream(stream)
+                    .await
+                    .map_err(|e| Err::<(), Error>(Error::from(e))),
             } {
                 log::error!("Error during connection handling: {:?}", e);
             }

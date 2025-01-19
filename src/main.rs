@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Run with SOCKS5 protocol for proxy connections", long_about = None)]
-struct SocksArgs {
+struct Socks5Args {
     #[arg(
         short = 'f',
         long,
@@ -16,9 +16,14 @@ struct SocksArgs {
     credentials_file: Option<PathBuf>,
 }
 
+#[derive(Parser, Debug)]
+#[command(version, about = "Run with SOCKS4 protocol for proxy connections", long_about = None)]
+struct Socks4Args {}
+
 #[derive(Subcommand, Debug)]
 enum Commands {
-    Socks5(SocksArgs),
+    Socks5(Socks5Args),
+    Socks4(Socks4Args),
 }
 
 #[derive(Parser, Debug)]
@@ -30,6 +35,7 @@ struct Args {
         default_value = "127.0.0.1",
         help = "From what IP address listen for HTTP requests"
     )]
+    #[clap(global = true)]
     listen_ip: IpAddr,
 
     #[arg(
@@ -38,6 +44,7 @@ struct Args {
         default_value = "8000",
         help = "From what port listen for HTTP requests"
     )]
+    #[clap(global = true)]
     listen_port: u16,
     #[arg(
         short = 'v',
@@ -58,6 +65,7 @@ impl Into<ExecuteConfig> for Args {
             Commands::Socks5(args) => ProxyMode::SOCKS5 {
                 credentials_file: args.credentials_file,
             },
+            Commands::Socks4(_) => ProxyMode::SOCKS4 {},
         };
         ExecuteConfig {
             listen_address: SocketAddr::new(self.listen_ip, self.listen_port),
