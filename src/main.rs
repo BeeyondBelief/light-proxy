@@ -5,21 +5,25 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Run with SOCKS protocol for proxy connections", long_about = None)]
-struct SocksArgs {
+#[command(version, about = "Run with SOCKS5 protocol for proxy connections", long_about = None)]
+struct Socks5Args {
     #[arg(
         short = 'f',
         long,
         help = "Path to the file where user credentials are stored. Format of a files is: \
-            <user:password\n> or just <user:\n> in the second case <user:> means an access token. \
-            The file only used for SOCKS5 connections."
+            <user:password\n> or just <user:\n> in the second case <user:> means an access token"
     )]
     credentials_file: Option<PathBuf>,
 }
 
+#[derive(Parser, Debug)]
+#[command(version, about = "Run with SOCKS4 protocol for proxy connections", long_about = None)]
+struct Socks4Args {}
+
 #[derive(Subcommand, Debug)]
 enum Commands {
-    Socks(SocksArgs),
+    Socks5(Socks5Args),
+    Socks4(Socks4Args),
 }
 
 #[derive(Parser, Debug)]
@@ -31,6 +35,7 @@ struct Args {
         default_value = "127.0.0.1",
         help = "From what IP address listen for HTTP requests"
     )]
+    #[clap(global = true)]
     listen_ip: IpAddr,
 
     #[arg(
@@ -39,6 +44,7 @@ struct Args {
         default_value = "8000",
         help = "From what port listen for HTTP requests"
     )]
+    #[clap(global = true)]
     listen_port: u16,
     #[arg(
         short = 'v',
@@ -56,9 +62,10 @@ struct Args {
 impl Into<ExecuteConfig> for Args {
     fn into(self) -> ExecuteConfig {
         let mode = match self.command {
-            Commands::Socks(args) => ProxyMode::SOCKS {
+            Commands::Socks5(args) => ProxyMode::SOCKS5 {
                 credentials_file: args.credentials_file,
             },
+            Commands::Socks4(_) => ProxyMode::SOCKS4 {},
         };
         ExecuteConfig {
             listen_address: SocketAddr::new(self.listen_ip, self.listen_port),
@@ -77,7 +84,8 @@ fn u8_to_log_level(value: u8) -> log::LevelFilter {
     }
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
     if args.verbosity > 0 {
         std::env::set_var(
@@ -87,7 +95,7 @@ fn main() -> Result<()> {
     }
 
     env_logger::init();
-    if let Err(e) = run(args.into()) {
+    if let Err(e) = run(args.into()).await {
         log::error!("{:?}", e);
         std::process::exit(1);
     }

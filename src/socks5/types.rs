@@ -1,39 +1,15 @@
-use crate::socks::error::Error;
-use crate::socks::result::Result;
+use crate::socks5::error::Error;
+use crate::socks5::result::Result;
 use std::collections::HashSet;
 use std::io;
 use std::io::{BufRead, BufReader};
-use std::net::TcpStream;
 use std::path::PathBuf;
 
 // Описание протокола https://datatracker.ietf.org/doc/html/rfc1928
-pub type StreamId = String;
 pub const SUCCESS_CODE: u8 = 0;
 pub const CREDENTIAL_AUTH_VERSION: u8 = 1;
 
-#[derive(Debug, Eq, PartialEq)]
-pub enum SocksProtocol {
-    SOCKS5,
-}
-
-impl SocksProtocol {
-    pub fn value(&self) -> u8 {
-        match self {
-            SocksProtocol::SOCKS5 => 5,
-        }
-    }
-}
-
-impl TryFrom<u8> for SocksProtocol {
-    type Error = Error;
-
-    fn try_from(value: u8) -> Result<SocksProtocol> {
-        match value {
-            5 => Ok(SocksProtocol::SOCKS5),
-            n => Err(Error::SocksProtocolVersionNotSupported(n)),
-        }
-    }
-}
+pub const SOCKS5_VERSION: u8 = 5;
 
 pub enum SocksCMD {
     CONNECT,
@@ -52,7 +28,7 @@ impl TryFrom<u8> for SocksCMD {
     fn try_from(value: u8) -> Result<SocksCMD> {
         match value {
             1 => Ok(SocksCMD::CONNECT),
-            _ => Err(Error::SocksCMDNotSupported),
+            n => Err(Error::SocksCMDNotSupported(n)),
         }
     }
 }
@@ -88,7 +64,7 @@ impl Socks5ErrCode {
 impl From<&Error> for Socks5ErrCode {
     fn from(value: &Error) -> Self {
         match value {
-            Error::SocksCMDNotSupported => Socks5ErrCode::CommandUnsupported,
+            Error::SocksCMDNotSupported(_) => Socks5ErrCode::CommandUnsupported,
             Error::SocksAddrTypeNotSupported => Socks5ErrCode::AddressTypeNotSupported,
             Error::SockAuthMethodNotSupportedByClient => Socks5ErrCode::AuthMethodNotSupported,
             Error::SocksBadCredentialsProvided => Socks5ErrCode::ConnectionNotAllowed,
@@ -143,11 +119,6 @@ impl SocksAuthMethod {
             SocksAuthMethod::Credentials { provider: _ } => 2,
         }
     }
-}
-
-pub struct SockTarget {
-    pub id: StreamId,
-    pub stream: TcpStream,
 }
 
 pub struct Credentials {
