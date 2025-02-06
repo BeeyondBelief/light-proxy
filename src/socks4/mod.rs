@@ -11,7 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 // SOCKS5 handshake with credentials can allocate maximum 255 bytes at once
 const MIN_BUFFER_SIZE: usize = 255;
-const ANONIMUS_CLIENT_NAME: &'static str = "unknown";
+const ANONYMOUS_CLIENT_NAME: &'static str = "unknown";
 
 pub struct Socks4Proxy;
 impl Socks4Proxy {
@@ -86,7 +86,7 @@ async fn handshake_socks4(
     let userid = {
         let length = stream.read(&mut buff).await?;
         if length < 2 {
-            ANONIMUS_CLIENT_NAME.to_string()
+            ANONYMOUS_CLIENT_NAME.to_string()
         } else {
             let mut string = String::new();
             string.extend(buff[..length].iter_mut().map(|b| *b as char));

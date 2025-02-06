@@ -12,7 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 // SOCKS5 handshake with credentials can allocate maximum 255 bytes at once
 const MIN_BUFFER_SIZE: usize = 255;
-const ANONIMUS_CLIENT_NAME: &'static str = "unknown";
+const ANONYMOUS_CLIENT_NAME: &'static str = "unknown";
 
 pub struct Socks5Proxy {
     auth: types::SocksAuthMethod,
@@ -132,7 +132,7 @@ async fn handle_socks5_auth(
     buff[1] = auth.value();
     stream.write(&buff[..2]).await?;
     match auth {
-        types::SocksAuthMethod::NoAuth => Ok(ANONIMUS_CLIENT_NAME.to_string()),
+        types::SocksAuthMethod::NoAuth => Ok(ANONYMOUS_CLIENT_NAME.to_string()),
         types::SocksAuthMethod::Credentials { provider } => {
             let result;
             let mut result_code = types::SUCCESS_CODE;
