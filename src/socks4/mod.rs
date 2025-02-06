@@ -9,8 +9,8 @@ pub use result::Result;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-// SOCKS5 handshake with credentials can allocate maximum 255 bytes at once
-const MIN_BUFFER_SIZE: usize = 255;
+// handshake with username can allocate maximum 255 bytes at once
+const HANDSHAKE_BUFFER_SIZE: usize = 255;
 const ANONYMOUS_CLIENT_NAME: &'static str = "unknown";
 
 pub struct Socks4Proxy;
@@ -60,7 +60,7 @@ impl Socks4Proxy {
 async fn handshake_socks4(
     stream: &mut tokio::net::TcpStream,
 ) -> Result<(String, tokio::net::TcpStream)> {
-    let mut buff = [0u8; MIN_BUFFER_SIZE];
+    let mut buff = [0u8; HANDSHAKE_BUFFER_SIZE];
 
     log::info!("Start SOCKS4 handshake");
 

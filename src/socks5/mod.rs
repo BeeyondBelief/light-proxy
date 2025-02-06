@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 // SOCKS5 handshake with credentials can allocate maximum 255 bytes at once
-const MIN_BUFFER_SIZE: usize = 255;
+const HANDSHAKE_BUFFER_SIZE: usize = 255;
 const ANONYMOUS_CLIENT_NAME: &'static str = "unknown";
 
 pub struct Socks5Proxy {
@@ -74,7 +74,7 @@ async fn handshake_socks5(
     stream: &mut tokio::net::TcpStream,
     auth: &types::SocksAuthMethod,
 ) -> Result<(String, tokio::net::TcpStream)> {
-    let mut buff = [0u8; MIN_BUFFER_SIZE];
+    let mut buff = [0u8; HANDSHAKE_BUFFER_SIZE];
     let supported_auth_count = start_socks5_handshake(stream, &mut buff).await?;
     let client_name = handle_socks5_auth(stream, auth, supported_auth_count, &mut buff).await?;
     let target = finish_socks5_handshake(stream, &mut buff).await?;
@@ -121,7 +121,10 @@ async fn handle_socks5_auth(
     supported_auth_count: usize,
     buff: &mut [u8],
 ) -> Result<String> {
-    assert!(buff.len() >= MIN_BUFFER_SIZE, "Buffer size is too small");
+    assert!(
+        buff.len() >= HANDSHAKE_BUFFER_SIZE,
+        "Buffer size is too small"
+    );
 
     log::debug!("Set authentication method \"{}\"", auth.value(),);
     if !buff[..supported_auth_count].contains(&auth.value()) {
