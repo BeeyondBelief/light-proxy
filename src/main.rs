@@ -1,4 +1,4 @@
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use light_proxy::{run, ExecuteConfig, ProxyMode, Result};
 use log;
 use std::net::{IpAddr, SocketAddr};
@@ -10,8 +10,9 @@ struct Socks5Args {
     #[arg(
         short = 'f',
         long,
-        help = "Path to the file where user credentials are stored. Format of a files is: \
-            <user:password\n> or just <user:\n> in the second case <user:> means an access token"
+        help = "Path to the file where user credentials are stored. Each line of a file \
+            has format: <user:password> or just <user:> (colon is required!). \
+            If password is omitted, only username required to establish connection."
     )]
     credentials_file: Option<PathBuf>,
 }
@@ -33,7 +34,8 @@ struct Args {
         short = 'l',
         long,
         default_value = "127.0.0.1",
-        help = "From what IP address listen for HTTP requests"
+        help = "Listen on this IP address for incoming connections. Use 0.0.0.0 or :: to listen \
+                for incoming connections from all IP addresses available on machine"
     )]
     #[clap(global = true)]
     listen_ip: IpAddr,
@@ -42,13 +44,13 @@ struct Args {
         short = 'p',
         long,
         default_value = "8000",
-        help = "From what port listen for HTTP requests"
+        help = "Listening on this port for incoming connections."
     )]
     #[clap(global = true)]
     listen_port: u16,
     #[arg(
         short = 'v',
-        action = ArgAction::Count,
+        default_value = "0",
         help = "How verbose logging messages are. The more value is set the more messages are \
                 displayed. Maximum message verbosity set at 5"
     )]
