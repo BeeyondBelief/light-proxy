@@ -43,14 +43,8 @@ pub async fn run(cfg: ExecuteConfig) -> Result<()> {
         tokio::spawn(async move {
             log::debug!("Processing connection \"{}\"", addr);
             if let Err(e) = match handle.as_ref() {
-                ProxyImpl::SOCKS5(mode) => mode
-                    .accept_stream(stream)
-                    .await
-                    .map_err(|e| Err::<(), Error>(Error::from(e))),
-                ProxyImpl::SOCKS4(mode) => mode
-                    .accept_stream(stream)
-                    .await
-                    .map_err(|e| Err::<(), Error>(Error::from(e))),
+                ProxyImpl::SOCKS5(mode) => mode.accept_stream(stream).await.map_err(Error::from),
+                ProxyImpl::SOCKS4(mode) => mode.accept_stream(stream).await.map_err(Error::from),
             } {
                 log::error!("Error during connection handling: {:?}", e);
             }
