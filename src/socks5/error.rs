@@ -15,6 +15,7 @@ pub enum Error {
     SocksBadCredentialsProvided,
 
     BadString,
+    DomainLookupError(String),
 
     #[from]
     IO(std::io::Error),

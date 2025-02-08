@@ -37,7 +37,7 @@ pub enum Socks5ErrCode {
     GeneralFailure,
     ConnectionNotAllowed,
     // NetworkUnreachable,
-    // HostUnreachable,
+    HostUnreachable,
     ConnectionRefused,
     // TtlExpired,
     CommandUnsupported,
@@ -51,7 +51,7 @@ impl Socks5ErrCode {
             Socks5ErrCode::GeneralFailure => 1,
             Socks5ErrCode::ConnectionNotAllowed => 2,
             // Socks5ErrCode::NetworkUnreachable => 3,
-            // Socks5ErrCode::HostUnreachable => 4,
+            Socks5ErrCode::HostUnreachable => 4,
             Socks5ErrCode::ConnectionRefused => 5,
             // Socks5ErrCode::TtlExpired => 6,
             Socks5ErrCode::CommandUnsupported => 7,
@@ -68,6 +68,7 @@ impl From<&Error> for Socks5ErrCode {
             Error::SocksAddrTypeNotSupported => Socks5ErrCode::AddressTypeNotSupported,
             Error::SockAuthMethodNotSupportedByClient => Socks5ErrCode::AuthMethodNotSupported,
             Error::SocksBadCredentialsProvided => Socks5ErrCode::ConnectionNotAllowed,
+            Error::DomainLookupError(_) => Socks5ErrCode::HostUnreachable,
             Error::IO(e) => match e.kind() {
                 io::ErrorKind::ConnectionRefused => Socks5ErrCode::ConnectionRefused,
                 // io::ErrorKind::HostUnreachable => Socks5ErrCode::HostUnreachable,
@@ -81,7 +82,7 @@ impl From<&Error> for Socks5ErrCode {
 
 pub enum SocksAddrType {
     IPV4,
-    // DOMAINNAME,
+    DOMAINNAME,
     IPV6,
 }
 
@@ -89,7 +90,7 @@ impl SocksAddrType {
     pub fn value(&self) -> u8 {
         match self {
             SocksAddrType::IPV4 => 1,
-            // SocksAddrType::DOMAINNAME => 3,
+            SocksAddrType::DOMAINNAME => 3,
             SocksAddrType::IPV6 => 4,
         }
     }
@@ -100,7 +101,7 @@ impl TryFrom<u8> for SocksAddrType {
     fn try_from(value: u8) -> Result<SocksAddrType> {
         match value {
             1 => Ok(SocksAddrType::IPV4),
-            // 3 => Ok(SocksAddrType::DOMAINNAME),
+            3 => Ok(SocksAddrType::DOMAINNAME),
             4 => Ok(SocksAddrType::IPV6),
             _ => Err(Error::SocksAddrTypeNotSupported),
         }

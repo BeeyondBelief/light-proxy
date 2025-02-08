@@ -6,7 +6,7 @@ mod utils;
 pub use error::Error;
 use log;
 pub use result::Result;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -246,6 +246,18 @@ async fn read_request_details<const N: usize>(
             let slice = &mut buff[..16];
             stream.read_exact(slice).await?;
             IpAddr::V6(Ipv6Addr::from(<[u8; 16]>::try_from(slice).unwrap()))
+        }
+        types::SocksAddrType::DOMAINNAME => {
+            stream.read_exact(&mut buff[..1]).await?;
+            let domain_name_length = buff[0] as usize;
+            stream.read_exact(&mut buff[..domain_name_length]).await?;
+            let domain_name = String::from_utf8_lossy(&buff[..domain_name_length]);
+            log::debug!("Domain name: {}", domain_name);
+            let mut addrs_iter = format!("{}:{}", domain_name, 0).to_socket_addrs()?;
+            addrs_iter
+                .next()
+                .ok_or(Error::DomainLookupError(domain_name.to_string()))?
+                .ip()
         }
     };
 
