@@ -65,7 +65,7 @@ impl From<&Error> for Socks5ErrCode {
     fn from(value: &Error) -> Self {
         match value {
             Error::SocksCMDNotSupported(_) => Socks5ErrCode::CommandUnsupported,
-            Error::SocksAddrTypeNotSupported => Socks5ErrCode::AddressTypeNotSupported,
+            Error::SocksAddrTypeNotSupported(_) => Socks5ErrCode::AddressTypeNotSupported,
             Error::SockAuthMethodNotSupportedByClient => Socks5ErrCode::AuthMethodNotSupported,
             Error::SocksBadCredentialsProvided => Socks5ErrCode::ConnectionNotAllowed,
             Error::DomainLookupError(_) => Socks5ErrCode::HostUnreachable,
@@ -103,7 +103,7 @@ impl TryFrom<u8> for SocksAddrType {
             1 => Ok(SocksAddrType::IPV4),
             3 => Ok(SocksAddrType::DOMAINNAME),
             4 => Ok(SocksAddrType::IPV6),
-            _ => Err(Error::SocksAddrTypeNotSupported),
+            v => Err(Error::SocksAddrTypeNotSupported(v)),
         }
     }
 }

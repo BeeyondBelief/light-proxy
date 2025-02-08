@@ -6,7 +6,7 @@ pub enum Error {
     SocksProtocolVersionNotSupported(u8),
     SocksCredentialAuthVersionNotSupported(u8),
     SocksCMDNotSupported(u8),
-    SocksAddrTypeNotSupported,
+    SocksAddrTypeNotSupported(u8),
     SocksBadProtocol,
     SockAuthMethodNotSupportedByClient,
 
